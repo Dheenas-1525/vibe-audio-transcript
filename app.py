@@ -11,6 +11,7 @@ import uuid
 
 import yt_dlp
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from faster_whisper import WhisperModel
@@ -26,6 +27,12 @@ VLLM_MODEL = os.environ.get("VLLM_MODEL")
 DB_PATH = os.environ.get("JOBS_DB_PATH", "/app/data/jobs.db")
 
 app = FastAPI(title="ViBe Audio Transcript")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 jobs: dict[str, dict] = {}
 model_lock = threading.Lock()
 _model = None
