@@ -153,7 +153,7 @@
         <li><strong>Transcription</strong> — paste a YouTube URL, get a timestamped transcript back in the browser, downloadable as TXT / SRT / VTT. Runs fully local using <code>yt-dlp</code> + <code>faster-whisper</code>, no external API calls.</li>
         <li><strong>Question bank generation</strong> — upload a question-bank template CSV, and the app generates matching questions from the transcript using a self-hosted LLM (Qwen3, served via vLLM's OpenAI-compatible API), downloadable as a CSV that matches your template's exact columns.</li>
       </ol>
-      <p>Everything runs in a single Docker container (<code>app.py</code>, FastAPI) with an in-memory job store — no database.</p>
+      <p>Everything runs in a single Docker container (<code>app.py</code>, FastAPI), with job state cached in memory and persisted to a small SQLite file so it survives restarts (see <a href="#config">Configuration</a>).</p>
     </section>
 
     <section id="architecture">
@@ -433,7 +433,7 @@ docker compose up --build -d</code></pre>
         <tr>
           <td><span class="badge version">v1.2.0</span></td>
           <td>2026-07-21</td>
-          <td><code>3903f7e</code></td>
+          <td><code>24f692f</code></td>
           <td>
             Job state now persists to SQLite (<code>JOBS_DB_PATH</code>, backed by the new
             <code>app-data</code> Docker volume) instead of living only in an in-memory dict.
@@ -445,7 +445,7 @@ docker compose up --build -d</code></pre>
         <tr>
           <td><span class="badge version">v1.1.3</span></td>
           <td>2026-07-21</td>
-          <td><code>b4ea0b4</code></td>
+          <td><code>d75d503</code></td>
           <td>
             Documentation only: clarified the "Using the app" section — what file to upload in
             the question-bank template field, and that "questions per segment" is per-chunk, not
@@ -455,7 +455,7 @@ docker compose up --build -d</code></pre>
         <tr>
           <td><span class="badge version">v1.1.2</span></td>
           <td>2026-07-21</td>
-          <td><code>a0254a7</code></td>
+          <td><code>7171dfa</code></td>
           <td>
             Whisper now runs with <code>cpu_threads=os.cpu_count()</code> instead of the
             CTranslate2 default, since this deployment has no GPU — lets transcription use
@@ -465,7 +465,7 @@ docker compose up --build -d</code></pre>
         <tr>
           <td><span class="badge version">v1.1.1</span></td>
           <td>2026-07-21</td>
-          <td><code>8f7d73f</code></td>
+          <td><code>51c39cb</code></td>
           <td>Updated homepage subtitle to mention question bank generation.</td>
         </tr>
         <tr>
