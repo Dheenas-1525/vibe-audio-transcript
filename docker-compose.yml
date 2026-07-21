@@ -13,7 +13,9 @@ services:
       VLLM_MODEL: ${VLLM_MODEL:-}
     volumes:
       - whisper-models:/root/.cache/huggingface
+      - app-data:/app/data
     restart: unless-stopped
 
 volumes:
   whisper-models:
+  app-data:

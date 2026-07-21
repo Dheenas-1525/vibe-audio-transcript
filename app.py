@@ -1,8 +1,10 @@
 import csv
 import io
+import json
 import os
 import re
 import shutil
+import sqlite3
 import tempfile
 import threading
 import uuid
@@ -21,6 +23,7 @@ MODEL_SIZE = os.environ.get("WHISPER_MODEL", "small")
 VLLM_API_BASE = os.environ.get("VLLM_API_BASE")
 VLLM_API_KEY = os.environ.get("VLLM_API_KEY", "EMPTY")
 VLLM_MODEL = os.environ.get("VLLM_MODEL")
+DB_PATH = os.environ.get("JOBS_DB_PATH", "/app/data/jobs.db")
 
 app = FastAPI(title="ViBe Audio Transcript")
 jobs: dict[str, dict] = {}
@@ -28,6 +31,42 @@ model_lock = threading.Lock()
 _model = None
 vllm_client_lock = threading.Lock()
 _vllm_client = None
+db_lock = threading.Lock()
+
+os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+db_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+db_conn.execute("CREATE TABLE IF NOT EXISTS jobs (job_id TEXT PRIMARY KEY, data TEXT NOT NULL)")
+db_conn.commit()
+
+
+def save_job(job_id: str):
+    with db_lock:
+        db_conn.execute(
+            "INSERT INTO jobs (job_id, data) VALUES (?, ?) "
+            "ON CONFLICT(job_id) DO UPDATE SET data = excluded.data",
+            (job_id, json.dumps(jobs[job_id])),
+        )
+        db_conn.commit()
+
+
+def load_jobs():
+    """Restore jobs from disk on startup; any job whose background thread
+    died with the previous process can never finish, so mark it errored
+    instead of leaving it stuck showing "transcribing"/"generating" forever."""
+    with db_lock:
+        rows = db_conn.execute("SELECT job_id, data FROM jobs").fetchall()
+    for job_id, data in rows:
+        job = json.loads(data)
+        if job.get("status") not in ("done", "error"):
+            job["status"] = "error"
+            job["error"] = "Interrupted by a server restart — please re-transcribe."
+        if job.get("qb_status") not in (None, "done", "error"):
+            job["qb_status"] = "error"
+            job["qb_error"] = "Interrupted by a server restart — please regenerate."
+        jobs[job_id] = job
+
+
+load_jobs()
 
 
 def get_model():
@@ -64,6 +103,7 @@ def run_job(job_id: str, url: str):
     tmpdir = tempfile.mkdtemp()
     try:
         job["status"] = "downloading"
+        save_job(job_id)
         ydl_opts = {
             "format": "bestaudio/best",
             "outtmpl": os.path.join(tmpdir, "audio.%(ext)s"),
@@ -77,6 +117,7 @@ def run_job(job_id: str, url: str):
         audio = os.path.join(tmpdir, "audio.mp3")
 
         job["status"] = "transcribing"
+        save_job(job_id)
         segments, _ = get_model().transcribe(audio, vad_filter=True)
         result = []
         for seg in segments:
@@ -84,9 +125,11 @@ def run_job(job_id: str, url: str):
             job["progress"] = round(seg.end, 1)
         job["segments"] = result
         job["status"] = "done"
+        save_job(job_id)
     except Exception as e:
         job["status"] = "error"
         job["error"] = str(e)
+        save_job(job_id)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -101,6 +144,7 @@ def transcribe(req: TranscribeRequest):
         raise HTTPException(400, "Not a valid YouTube URL")
     job_id = uuid.uuid4().hex[:12]
     jobs[job_id] = {"status": "queued", "progress": 0}
+    save_job(job_id)
     threading.Thread(target=run_job, args=(job_id, req.url), daemon=True).start()
     return {"job_id": job_id}
 
@@ -146,10 +190,12 @@ def run_qb_job(job_id: str, template_columns: list[str], questions_per_segment: 
     job = jobs[job_id]
     try:
         job["qb_status"] = "generating"
+        save_job(job_id)
         client = get_vllm_client()
 
         def progress(done, total):
             job["qb_progress"] = {"done": done, "total": total}
+            save_job(job_id)
 
         rows = qb_generator.generate_question_bank(
             job["segments"], template_columns, client, VLLM_MODEL,
@@ -158,9 +204,11 @@ def run_qb_job(job_id: str, template_columns: list[str], questions_per_segment: 
         job["qb_rows"] = rows
         job["qb_columns"] = template_columns
         job["qb_status"] = "done"
+        save_job(job_id)
     except Exception as e:
         job["qb_status"] = "error"
         job["qb_error"] = str(e)
+        save_job(job_id)
 
 
 @app.post("/api/generate-questions/{job_id}")
@@ -179,6 +227,7 @@ async def generate_questions(
         raise HTTPException(400, "Template CSV is empty")
     job["qb_status"] = "queued"
     job["qb_progress"] = {"done": 0, "total": 0}
+    save_job(job_id)
     threading.Thread(
         target=run_qb_job, args=(job_id, template_columns, questions_per_segment), daemon=True
     ).start()

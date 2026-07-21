@@ -1,6 +1,6 @@
 # ViBe Audio Transcript
 
-**v1.1.3** — YouTube URL → timestamped transcript → template-driven question bank CSV.
+**v1.2.0** — YouTube URL → timestamped transcript → template-driven question bank CSV.
 
 Paste a YouTube URL, get a timestamped transcript (download as TXT / SRT / VTT). Upload a
 question-bank template CSV and generate matching questions from that transcript using a
@@ -32,6 +32,7 @@ if running on a remote server — see `MANUAL.html` § Accessing the app).
 | `VLLM_API_KEY` | `EMPTY` | vLLM API key, if your server checks one |
 | `VLLM_MODEL` | *(required)* | Exact served model ID, e.g. `Qwen/Qwen3-30B-A3B` |
 | `WEB_PORT` | `8000` | Host-side port (change if 8000 is already taken) |
+| `JOBS_DB_PATH` | `/app/data/jobs.db` | SQLite file persisting job state across restarts (backed by the `app-data` volume) |
 
 The Whisper model downloads on first use and is cached in a Docker volume.
 
