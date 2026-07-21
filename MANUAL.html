@@ -358,6 +358,20 @@ docker compose up --build -d</code></pre>
         <li>If that works but a remote browser still can't reach it, it's a network/firewall/NAT issue, not an app issue — see <a href="#access">Accessing the app</a>.</li>
       </ul>
 
+      <h3>Transcription is slow</h3>
+      <p>
+        This deployment runs Whisper on <strong>CPU only</strong> (<code>device="cpu"</code> in
+        <code>app.py</code> — no GPU wired in). That's inherently much slower than realtime for
+        anything past the <code>tiny</code>/<code>small</code> models; expect a 20-minute video to
+        take several minutes to transcribe, more with <code>medium</code>/<code>large-v3</code>.
+        Two things affect this:
+      </p>
+      <ul>
+        <li><code>WHISPER_MODEL</code> — smaller = faster. Check what's actually set: <code>grep WHISPER_MODEL .env</code>.</li>
+        <li>CPU thread usage — <code>get_model()</code> passes <code>cpu_threads=os.cpu_count()</code> so faster-whisper uses every core the container can see, rather than CTranslate2's conservative default.</li>
+      </ul>
+      <p>If a GPU becomes available later, switching <code>device="cpu"</code> → <code>device="cuda"</code> plus adding the NVIDIA container runtime to <code>docker-compose.yml</code> is typically a 5-10x speedup.</p>
+
       <h3>Port 8000 already in use</h3>
       <p>Set <code>WEB_PORT</code> in <code>.env</code> to something else, e.g. <code>WEB_PORT=8080</code>, then <code>docker compose up -d</code>. The container's internal port never changes — only the host-side mapping.</p>
     </section>
@@ -377,6 +391,16 @@ docker compose up --build -d</code></pre>
       <h2>Version history</h2>
       <table>
         <tr><th>Version</th><th>Date</th><th>Commit</th><th>Changes</th></tr>
+        <tr>
+          <td><span class="badge version">v1.1.2</span></td>
+          <td>2026-07-21</td>
+          <td><code>pending</code></td>
+          <td>
+            Whisper now runs with <code>cpu_threads=os.cpu_count()</code> instead of the
+            CTranslate2 default, since this deployment has no GPU — lets transcription use
+            all available CPU cores on the host. See <a href="#troubleshooting">Troubleshooting</a>.
+          </td>
+        </tr>
         <tr>
           <td><span class="badge version">v1.1.1</span></td>
           <td>2026-07-21</td>

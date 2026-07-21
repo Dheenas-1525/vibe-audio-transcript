@@ -34,7 +34,10 @@ def get_model():
     global _model
     with model_lock:
         if _model is None:
-            _model = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
+            _model = WhisperModel(
+                MODEL_SIZE, device="cpu", compute_type="int8",
+                cpu_threads=os.cpu_count() or 4,
+            )
         return _model
 
 
