@@ -1,6 +1,6 @@
 # ViBe Audio Transcript
 
-**v1.2.2** — YouTube URL → timestamped transcript → template-driven question bank CSV.
+**v1.3.0** — YouTube URL → timestamped transcript → template-driven question bank CSV.
 
 Paste a YouTube URL, get a timestamped transcript (download as TXT / SRT / VTT). Upload a
 question-bank template CSV and generate matching questions from that transcript using a
@@ -28,6 +28,8 @@ if running on a remote server — see `MANUAL.html` § Accessing the app).
 | Variable | Default | Purpose |
 |---|---|---|
 | `WHISPER_MODEL` | `small` | `tiny` \| `base` \| `small` \| `medium` \| `large-v3` — bigger = slower, more accurate |
+| `WHISPER_DEVICE` | `cpu` | `cpu` \| `cuda` — on a GPU host also run with `docker-compose.gpu.yml` (see `MANUAL.html`) |
+| `WHISPER_COMPUTE_TYPE` | `int8` | CTranslate2 quantization — `int8` for CPU, `float16` recommended for GPU |
 | `VLLM_API_BASE` | *(required)* | Base URL of your vLLM server, e.g. `http://172.16.13.91:8002/v1` — no `/chat/completions` suffix |
 | `VLLM_API_KEY` | `EMPTY` | vLLM API key, if your server checks one |
 | `VLLM_MODEL` | *(required)* | Exact served model ID, e.g. `Qwen/Qwen3-30B-A3B` |

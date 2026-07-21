@@ -1,0 +1,21 @@
+# GPU-host overlay. Use together with docker-compose.yml on machines with an
+# NVIDIA GPU + driver + nvidia-container-toolkit installed (e.g. a DGX node):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build -d
+#
+# Also set in .env on that host:
+#   WHISPER_DEVICE=cuda
+#   WHISPER_COMPUTE_TYPE=float16
+#
+# Do NOT apply this on a CPU-only host — referencing an nvidia device
+# reservation without the NVIDIA container toolkit installed can fail to
+# start the container even at zero GPUs requested.
+services:
+  vibe:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

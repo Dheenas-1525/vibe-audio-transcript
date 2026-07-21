@@ -21,6 +21,10 @@ from pydantic import BaseModel
 import qb_generator
 
 MODEL_SIZE = os.environ.get("WHISPER_MODEL", "small")
+WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cpu")
+WHISPER_COMPUTE_TYPE = os.environ.get(
+    "WHISPER_COMPUTE_TYPE", "float16" if WHISPER_DEVICE == "cuda" else "int8"
+)
 VLLM_API_BASE = os.environ.get("VLLM_API_BASE")
 VLLM_API_KEY = os.environ.get("VLLM_API_KEY", "EMPTY")
 VLLM_MODEL = os.environ.get("VLLM_MODEL")
@@ -81,7 +85,7 @@ def get_model():
     with model_lock:
         if _model is None:
             _model = WhisperModel(
-                MODEL_SIZE, device="cpu", compute_type="int8",
+                MODEL_SIZE, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE_TYPE,
                 cpu_threads=os.cpu_count() or 4,
             )
         return _model
