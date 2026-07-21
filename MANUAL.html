@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ViBe Audio Transcript — Manual</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: #0f1117; color: #e6e6e6; line-height: 1.6;
+  }
+  a { color: #9c8bff; }
+  code, pre { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  code {
+    background: #1c2030; padding: 2px 6px; border-radius: 4px; font-size: .88em;
+    color: #cfd3ff;
+  }
+  pre {
+    background: #14161f; border: 1px solid #262a38; border-radius: 10px;
+    padding: 16px 18px; overflow-x: auto; font-size: .85em; color: #d6d9e6;
+  }
+  pre code { background: none; padding: 0; color: inherit; }
+
+  .layout { display: flex; max-width: 1180px; margin: 0 auto; }
+  nav.toc {
+    width: 230px; flex-shrink: 0; padding: 40px 20px; position: sticky; top: 0;
+    align-self: flex-start; max-height: 100vh; overflow-y: auto;
+  }
+  nav.toc a {
+    display: block; padding: 5px 0; color: #9aa0b4; text-decoration: none; font-size: .88rem;
+  }
+  nav.toc a:hover { color: #cfd3ff; }
+  nav.toc .toc-title { color: #666; font-size: .72rem; text-transform: uppercase;
+    letter-spacing: .08em; margin: 18px 0 4px; }
+  nav.toc .toc-title:first-child { margin-top: 0; }
+
+  main { flex: 1; padding: 48px 40px 100px; min-width: 0; }
+
+  header.hero { margin-bottom: 48px; }
+  header.hero h1 { font-size: 2.1rem; margin: 0 0 6px; }
+  header.hero h1 span { color: #7c5cff; }
+  .meta { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px; background: #1c2030;
+    border: 1px solid #2a2e3b; color: #b8bcd6; padding: 4px 12px; border-radius: 999px;
+    font-size: .78rem; font-family: monospace;
+  }
+  .badge.version { background: #241a42; border-color: #43308a; color: #c8b8ff; }
+  .sub { color: #9aa0b4; max-width: 60ch; }
+
+  section { margin-bottom: 56px; scroll-margin-top: 24px; }
+  h2 {
+    font-size: 1.4rem; border-bottom: 1px solid #232736; padding-bottom: 10px;
+    margin: 0 0 20px;
+  }
+  h3 { font-size: 1.08rem; margin: 28px 0 10px; color: #f0f1f8; }
+  p { color: #c7cadb; margin: 0 0 14px; }
+  ul, ol { color: #c7cadb; padding-left: 22px; }
+  li { margin-bottom: 6px; }
+
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: .9rem; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid #232736; vertical-align: top; }
+  th { color: #9aa0b4; font-weight: 600; font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; }
+  td { color: #d3d6e6; }
+  tr:last-child td { border-bottom: none; }
+
+  .card {
+    background: #161923; border: 1px solid #232736; border-radius: 12px;
+    padding: 20px 22px; margin: 18px 0;
+  }
+  .note {
+    border-left: 3px solid #7c5cff; background: #1a1730; padding: 12px 16px;
+    border-radius: 0 8px 8px 0; margin: 16px 0; font-size: .92rem;
+  }
+  .warn {
+    border-left: 3px solid #e2a53a; background: #2a2210; padding: 12px 16px;
+    border-radius: 0 8px 8px 0; margin: 16px 0; font-size: .92rem;
+  }
+
+  .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 20px 0; }
+  .flow .box {
+    background: #1c2030; border: 1px solid #30354a; border-radius: 10px;
+    padding: 12px 16px; font-size: .85rem; color: #d6d9e6; min-width: 120px; text-align: center;
+  }
+  .flow .box.accent { border-color: #55428f; background: #221a3d; color: #cdbdff; }
+  .flow .arrow { color: #565c78; font-size: 1.1rem; }
+
+  .pipeline-group {
+    border: 1px dashed #2f3446; border-radius: 12px; padding: 16px 14px 10px;
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center; position: relative;
+  }
+  .pipeline-group .label {
+    position: absolute; top: -11px; left: 14px; background: #0f1117;
+    padding: 0 8px; font-size: .72rem; color: #6f7590; text-transform: uppercase; letter-spacing: .06em;
+  }
+
+  .status-pill {
+    display: inline-block; font-family: monospace; font-size: .82rem;
+    padding: 2px 9px; border-radius: 6px; background: #1c2030; color: #cfd3ff;
+  }
+
+  code.hl { color: #ffb454; }
+
+  footer { color: #565c78; font-size: .8rem; padding: 20px 40px 60px; }
+
+  @media (max-width: 880px) {
+    .layout { flex-direction: column; }
+    nav.toc { position: static; width: auto; max-height: none; padding: 24px 20px 0; }
+    main { padding: 24px 20px 80px; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav class="toc">
+    <div class="toc-title">Guide</div>
+    <a href="#overview">Overview</a>
+    <a href="#architecture">Architecture</a>
+    <a href="#how-it-works">How it works</a>
+    <div class="toc-title">Operate</div>
+    <a href="#setup">Setup &amp; deployment</a>
+    <a href="#config">Configuration</a>
+    <a href="#access">Accessing the app</a>
+    <div class="toc-title">Use</div>
+    <a href="#usage">Using the app</a>
+    <a href="#qb-format">Question bank format</a>
+    <a href="#api">API reference</a>
+    <div class="toc-title">Reference</div>
+    <a href="#troubleshooting">Troubleshooting</a>
+    <a href="#limitations">Known limitations</a>
+    <a href="#versions">Version history</a>
+  </nav>
+
+  <main>
+    <header class="hero">
+      <h1>Vi<span>Be</span> Audio Transcript — Manual</h1>
+      <p class="sub">YouTube URL → timestamped transcript → template-driven question bank CSV, generated by a self-hosted LLM.</p>
+      <div class="meta">
+        <span class="badge version">v1.1.0</span>
+        <span class="badge">last updated 2026-07-21</span>
+        <span class="badge">repo: Dheenas-1525/vibe-audio-transcript</span>
+      </div>
+    </header>
+
+    <section id="overview">
+      <h2>Overview</h2>
+      <p>
+        ViBe Audio Transcript is a small self-hosted web app with two chained stages:
+      </p>
+      <ol>
+        <li><strong>Transcription</strong> — paste a YouTube URL, get a timestamped transcript back in the browser, downloadable as TXT / SRT / VTT. Runs fully local using <code>yt-dlp</code> + <code>faster-whisper</code>, no external API calls.</li>
+        <li><strong>Question bank generation</strong> — upload a question-bank template CSV, and the app generates matching questions from the transcript using a self-hosted LLM (Qwen3, served via vLLM's OpenAI-compatible API), downloadable as a CSV that matches your template's exact columns.</li>
+      </ol>
+      <p>Everything runs in a single Docker container (<code>app.py</code>, FastAPI) with an in-memory job store — no database.</p>
+    </section>
+
+    <section id="architecture">
+      <h2>Architecture</h2>
+      <div class="pipeline-group">
+        <span class="label">Stage 1 — Transcription (local, no external API)</span>
+        <div class="flow">
+          <div class="box">Browser<br><small>paste URL</small></div>
+          <span class="arrow">→</span>
+          <div class="box">yt-dlp<br><small>download audio</small></div>
+          <span class="arrow">→</span>
+          <div class="box">ffmpeg<br><small>extract MP3</small></div>
+          <span class="arrow">→</span>
+          <div class="box">faster-whisper<br><small>speech → text</small></div>
+          <span class="arrow">→</span>
+          <div class="box accent">Timestamped<br>segments</div>
+        </div>
+      </div>
+      <div style="height:20px"></div>
+      <div class="pipeline-group">
+        <span class="label">Stage 2 — Question bank generation (remote LLM call)</span>
+        <div class="flow">
+          <div class="box accent">Timestamped<br>segments</div>
+          <span class="arrow">→</span>
+          <div class="box">qb_generator.py<br><small>chunk into ~150s windows</small></div>
+          <span class="arrow">→</span>
+          <div class="box">vLLM server<br><small>Qwen3-30B-A3B</small></div>
+          <span class="arrow">→</span>
+          <div class="box">CSV writer<br><small>matches uploaded template</small></div>
+          <span class="arrow">→</span>
+          <div class="box accent">Question bank<br>CSV download</div>
+        </div>
+      </div>
+
+      <h3>Files</h3>
+      <table>
+        <tr><th>File</th><th>Role</th></tr>
+        <tr><td><code>app.py</code></td><td>FastAPI app — job orchestration, all HTTP endpoints, in-memory <code>jobs</code> dict keyed by job ID.</td></tr>
+        <tr><td><code>qb_generator.py</code></td><td>Transcript chunking, prompt construction, vLLM calls, response validation, CSV serialization. No FastAPI/web dependency — pure logic.</td></tr>
+        <tr><td><code>static/index.html</code></td><td>Single-page frontend — plain HTML/CSS/JS, no build step, no framework.</td></tr>
+        <tr><td><code>Dockerfile</code> / <code>docker-compose.yml</code></td><td>Container build + runtime config (env vars, port, volumes).</td></tr>
+      </table>
+    </section>
+
+    <section id="how-it-works">
+      <h2>How it works, step by step</h2>
+      <h3>Transcription job lifecycle</h3>
+      <p><code>POST /api/transcribe</code> spawns a background thread (<code>run_job</code>) that moves a job through these statuses, polled every 1.5s by the browser via <code>GET /api/status/&#123;job_id&#125;</code>:</p>
+      <p>
+        <span class="status-pill">queued</span> →
+        <span class="status-pill">downloading</span> →
+        <span class="status-pill">transcribing</span> →
+        <span class="status-pill">done</span>
+        <span style="color:#565c78">(or</span>
+        <span class="status-pill">error</span><span style="color:#565c78">)</span>
+      </p>
+      <p>Audio is downloaded to a temp directory (<code>tempfile.mkdtemp()</code>), transcribed, then <strong>deleted immediately</strong> — the app never keeps the MP3 around, only the resulting <code>segments</code> list (<code>start</code>/<code>end</code>/<code>text</code> per line).</p>
+
+      <h3>Question bank job lifecycle</h3>
+      <p>Only available once a transcription job reaches <code>done</code>. <code>POST /api/generate-questions/&#123;job_id&#125;</code> (multipart: template CSV file + <code>questions_per_segment</code>) spawns <code>run_qb_job</code>, polled via <code>GET /api/qb-status/&#123;job_id&#125;</code>:</p>
+      <p>
+        <span class="status-pill">queued</span> →
+        <span class="status-pill">generating</span> →
+        <span class="status-pill">done</span>
+        <span style="color:#565c78">(or</span>
+        <span class="status-pill">error</span><span style="color:#565c78">)</span>
+      </p>
+      <p>Internally, <code>qb_generator.generate_question_bank()</code>:</p>
+      <ol>
+        <li>Splits the transcript's segments into consecutive ~150-second windows (<code>chunk_segments</code>). The last data point in each window becomes that window's label — <strong>the end boundary</strong>, not the start, matching the convention observed in reference question banks (the timestamp marks the point by which that segment's content has been covered).</li>
+        <li>For each window, calls the vLLM server asking for N true/false persona-statement questions strictly from that window's text.</li>
+        <li>Validates each returned item has all required fields and a valid <code>correct_answer</code> (<code>A</code> or <code>B</code>); drops anything malformed.</li>
+        <li>Assigns a running <code>Segment</code> index and global <code>S.No.</code>, and maps each question onto <em>whatever columns the uploaded template CSV defines</em> — the column set is never hardcoded, only the question style is.</li>
+      </ol>
+    </section>
+
+    <section id="setup">
+      <h2>Setup &amp; deployment</h2>
+      <h3>Local / server run</h3>
+      <pre><code>git clone git@github.com:Dheenas-1525/vibe-audio-transcript.git
+cd vibe-audio-transcript
+cp .env.example .env   # fill in VLLM_API_BASE / VLLM_MODEL (see Configuration)
+docker compose up --build -d</code></pre>
+      <p>The Whisper model downloads on first use and is cached in a named Docker volume (<code>whisper-models</code>), so subsequent restarts don't re-download it.</p>
+
+      <h3>Deploying an update</h3>
+      <pre><code># on your machine
+git add -A && git commit -m "..." && git push
+
+# on the server
+cd ~/vibe-audio-transcript
+git pull
+docker compose up --build -d</code></pre>
+      <div class="note">Always <code>git pull</code> before rebuilding on the server — if you ever edit files directly on the server, commit or stash them first, or the pull will conflict.</div>
+    </section>
+
+    <section id="config">
+      <h2>Configuration</h2>
+      <p>All configuration is environment variables, set via a <code>.env</code> file next to <code>docker-compose.yml</code> (auto-loaded by <code>docker compose</code>).</p>
+      <table>
+        <tr><th>Variable</th><th>Default</th><th>Purpose</th></tr>
+        <tr><td><code>WHISPER_MODEL</code></td><td><code>small</code></td><td>faster-whisper model size: <code>tiny</code> / <code>base</code> / <code>small</code> / <code>medium</code> / <code>large-v3</code>. Bigger = slower, more accurate.</td></tr>
+        <tr><td><code>VLLM_API_BASE</code></td><td><em>(required)</em></td><td>Base URL of your vLLM OpenAI-compatible server, e.g. <code>http://172.16.13.91:8002/v1</code>. <strong>Do not</strong> include <code>/chat/completions</code> — the client SDK appends that.</td></tr>
+        <tr><td><code>VLLM_API_KEY</code></td><td><code>EMPTY</code></td><td>API key for the vLLM server. Most self-hosted vLLM deployments don't check it, but the OpenAI SDK requires some non-empty value.</td></tr>
+        <tr><td><code>VLLM_MODEL</code></td><td><em>(required)</em></td><td>Exact served model ID, e.g. <code>Qwen/Qwen3-30B-A3B</code> — must match what <code>GET &lt;VLLM_API_BASE&gt;/models</code> reports.</td></tr>
+        <tr><td><code>WEB_PORT</code></td><td><code>8000</code></td><td>Host-side port the app is exposed on (container always listens on 8000 internally). Change this if 8000 is already taken on the server.</td></tr>
+      </table>
+      <div class="warn">The app has <strong>no authentication</strong>. Anyone who can reach its port can trigger YouTube downloads and LLM calls on your server/model. Keep it behind SSH tunneling or a private network unless an auth layer is added.</div>
+    </section>
+
+    <section id="access">
+      <h2>Accessing the app</h2>
+      <h3>From your own machine, via VS Code Remote-SSH</h3>
+      <ol>
+        <li>Open the <strong>Ports</strong> tab in VS Code (bottom panel).</li>
+        <li>Click <strong>Forward a Port</strong>, enter <code>8000</code> (or your <code>WEB_PORT</code>).</li>
+        <li>Click the browser icon next to the forwarded row, or open <code>http://localhost:8000</code> in your local browser.</li>
+      </ol>
+      <h3>From a plain terminal (no VS Code)</h3>
+      <pre><code>ssh -L 8000:localhost:8000 &lt;user&gt;@&lt;server-host&gt;</code></pre>
+      <p>Leave that session open, then browse <code>http://localhost:8000</code> on your own machine.</p>
+      <h3>Public access</h3>
+      <p>
+        Not yet configured. The server's public IP / domain (e.g. an existing <code>vibe.sastra.edu</code>) may already serve
+        a different, unrelated production app on ports 80/443 — don't reuse its path space for this tool. A separate
+        subdomain with its own nginx <code>server</code> block reverse-proxying to <code>127.0.0.1:8000</code> is the
+        recommended path when public access is needed; see the project's chat history / commit notes for the exact nginx
+        snippet used during setup discussions.
+      </p>
+    </section>
+
+    <section id="usage">
+      <h2>Using the app</h2>
+      <ol>
+        <li>Paste a YouTube URL into the input box, click <strong>Transcribe</strong>.</li>
+        <li>Status updates live: <em>Downloading audio…</em> → <em>Transcribing… (mm:ss processed)</em> → done.</li>
+        <li>Once done, the timestamped transcript renders in the page, with TXT/SRT/VTT download links above it.</li>
+        <li>A second card appears: upload your question-bank template CSV, set questions-per-segment (default 5), click <strong>Generate Question Bank</strong>.</li>
+        <li>Progress shows as <em>Generating questions… chunk X/Y</em>. When done, a <strong>Download Question Bank CSV</strong> link appears.</li>
+      </ol>
+    </section>
+
+    <section id="qb-format">
+      <h2>Question bank format</h2>
+      <p>
+        The generator reproduces a specific style discovered from an existing hand-made question bank
+        (<code>preparation_of_soap_QB.csv</code>): each question is a <strong>true/false persona statement</strong>,
+        not a plain multiple-choice question.
+      </p>
+      <div class="card">
+        <strong>Example row (abbreviated)</strong>
+        <table>
+          <tr><td><strong>Question</strong></td><td>A junior chemist describes soap as the sodium or potassium salt of long-chain fatty acids produced by base hydrolysis of fats or oils.</td></tr>
+          <tr><td><strong>Option A</strong></td><td>True — <em>"Correct. Soap is precisely defined as..."</em></td></tr>
+          <tr><td><strong>Option B</strong></td><td>False — <em>"Incorrect. This is the accurate definition..."</em></td></tr>
+          <tr><td><strong>Option C / D</strong></td><td><em>(always blank)</em></td></tr>
+          <tr><td><strong>Correct Answer</strong></td><td>A</td></tr>
+        </table>
+      </div>
+      <p>
+        Column <em>names</em> and order always come from whatever template CSV you upload — the app reads only its
+        header row (<code>Segment, Question Timestamp [mm:ss], S.No., Question, Hint, Option A, Expln-A, ...</code>) and
+        maps generated content onto those exact columns. The true/false <em>style</em> itself is fixed in
+        <code>qb_generator.py</code>'s <code>STYLE_EXAMPLE_ROWS</code> few-shot example — change that constant to switch to
+        a different question style (e.g. full 4-option MCQs) for a different course template.
+      </p>
+    </section>
+
+    <section id="api">
+      <h2>API reference</h2>
+      <table>
+        <tr><th>Method &amp; path</th><th>Body / params</th><th>Description</th></tr>
+        <tr><td><code>POST /api/transcribe</code></td><td>JSON <code>&#123;url&#125;</code></td><td>Starts a transcription job. Returns <code>&#123;job_id&#125;</code>.</td></tr>
+        <tr><td><code>GET /api/status/&#123;job_id&#125;</code></td><td>—</td><td>Poll transcription status/progress/segments.</td></tr>
+        <tr><td><code>GET /api/download/&#123;job_id&#125;</code></td><td><code>?fmt=txt|srt|vtt</code></td><td>Download the transcript once <code>status=done</code>.</td></tr>
+        <tr><td><code>POST /api/generate-questions/&#123;job_id&#125;</code></td><td>multipart: <code>template</code> (CSV file), <code>questions_per_segment</code> (int, default 5)</td><td>Starts question-bank generation for a completed transcription job.</td></tr>
+        <tr><td><code>GET /api/qb-status/&#123;job_id&#125;</code></td><td>—</td><td>Poll question-bank generation status/progress/error.</td></tr>
+        <tr><td><code>GET /api/download-questions/&#123;job_id&#125;</code></td><td>—</td><td>Download the generated question bank CSV once <code>qb_status=done</code>.</td></tr>
+      </table>
+    </section>
+
+    <section id="troubleshooting">
+      <h2>Troubleshooting</h2>
+      <h3>Question generation fails or returns garbage</h3>
+      <p>
+        Verified live against a vLLM 0.19.0 server serving <code>Qwen/Qwen3-30B-A3B</code>: this build does
+        <strong>not</strong> have a guided-decoding backend enabled, so the naive <code>guided_json</code> parameter is
+        silently ignored. The app instead uses <code>response_format: &#123;"type": "json_object"&#125;</code> (which this
+        server does honor) plus <code>chat_template_kwargs: &#123;"enable_thinking": false&#125;</code> to stop Qwen3 from
+        wrapping a <code>&lt;think&gt;...&lt;/think&gt;</code> block around its answer. If you point this app at a
+        different vLLM/model setup and generation breaks again, check the same two things first:
+      </p>
+      <ul>
+        <li>Does <code>curl &lt;VLLM_API_BASE&gt;/chat/completions</code> with <code>response_format: &#123;"type":"json_object"&#125;</code> return clean JSON?</li>
+        <li>Does the model wrap output in a reasoning/think block by default, and does it support disabling that via <code>chat_template_kwargs</code>?</li>
+      </ul>
+
+      <h3>Can't reach the app in a browser</h3>
+      <ul>
+        <li>Confirm the container is actually up: <code>docker compose ps</code> (status should be <code>Up</code>, not <code>Restarting</code>).</li>
+        <li>Confirm it responds locally on the server: <code>curl -s -o /dev/null -w "%&#123;http_code&#125;" http://localhost:8000</code> should print <code>200</code>.</li>
+        <li>If that works but a remote browser still can't reach it, it's a network/firewall/NAT issue, not an app issue — see <a href="#access">Accessing the app</a>.</li>
+      </ul>
+
+      <h3>Port 8000 already in use</h3>
+      <p>Set <code>WEB_PORT</code> in <code>.env</code> to something else, e.g. <code>WEB_PORT=8080</code>, then <code>docker compose up -d</code>. The container's internal port never changes — only the host-side mapping.</p>
+    </section>
+
+    <section id="limitations">
+      <h2>Known limitations</h2>
+      <ul>
+        <li><strong>No authentication.</strong> Anyone reaching the port can use it.</li>
+        <li><strong>Audio is not persisted.</strong> The downloaded MP3 is deleted right after transcription — there is no way to retrieve it after the fact.</li>
+        <li><strong>In-memory job store.</strong> The <code>jobs</code> dict lives in process memory only — restarting the container loses all job history and generated question banks that haven't been downloaded yet.</li>
+        <li><strong>Sequential chunk generation.</strong> Question-bank chunks are generated one at a time (not parallelized) to avoid overloading the shared vLLM server — long videos with many chunks take proportionally longer.</li>
+        <li><strong>Single question style baked in.</strong> The true/false persona format is hardcoded as the few-shot example; a genuinely different question style needs a code change to <code>STYLE_EXAMPLE_ROWS</code>, not just a different template upload.</li>
+      </ul>
+    </section>
+
+    <section id="versions">
+      <h2>Version history</h2>
+      <table>
+        <tr><th>Version</th><th>Date</th><th>Commit</th><th>Changes</th></tr>
+        <tr>
+          <td><span class="badge version">v1.1.1</span></td>
+          <td>2026-07-21</td>
+          <td><code>8f7d73f</code></td>
+          <td>Updated homepage subtitle to mention question bank generation.</td>
+        </tr>
+        <tr>
+          <td><span class="badge version">v1.1.0</span></td>
+          <td>2026-07-21</td>
+          <td><code>2ddb5f6</code></td>
+          <td>
+            Added question-bank generation: <code>qb_generator.py</code>, new
+            <code>/api/generate-questions</code> / <code>/api/qb-status</code> / <code>/api/download-questions</code>
+            endpoints, template-upload UI, self-hosted vLLM (Qwen3) integration with <code>response_format</code>-based
+            structured output.
+          </td>
+        </tr>
+        <tr>
+          <td><span class="badge version">v1.0.0</span></td>
+          <td>2026-07-19</td>
+          <td><code>2ddb5f6</code></td>
+          <td>Initial release: YouTube URL → timestamped transcript via yt-dlp + faster-whisper, TXT/SRT/VTT download.</td>
+        </tr>
+      </table>
+      <div class="note">
+        Version numbers here are documentation-level (semver-style), tracked in this file and <code>README.md</code>
+        rather than as git tags. To formalize further, tag releases with <code>git tag v1.1.1 &amp;&amp; git push --tags</code>
+        alongside each entry added here.
+      </div>
+    </section>
+  </main>
+</div>
+<footer>ViBe Audio Transcript · internal tool documentation · edit this file at <code>MANUAL.html</code> in the repo root.</footer>
+</body>
+</html>
