@@ -147,7 +147,9 @@ function pollQB(id) {
       $("qb-status").textContent = "Queued...";
     } else if (job.qb_status === "generating") {
       const p = job.qb_progress || {};
-      $("qb-status").textContent = `Generating questions... chunk ${p.done || 0}/${p.total || "?"}`;
+      $("qb-status").textContent = p.total
+        ? `Generating questions... segment ${p.done || 0}/${p.total}`
+        : "Planning segments...";
     } else if (job.qb_status === "error") {
       clearInterval(qbTimer);
       $("qb-status").textContent = "Error: " + job.qb_error;

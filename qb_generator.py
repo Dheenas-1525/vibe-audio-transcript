@@ -7,8 +7,22 @@ log = logging.getLogger(__name__)
 
 RETRY_LIMIT = 2
 
-# Style anchor lifted from a real, hand-made question bank so the model
-# reliably reproduces the persona / true-false / dual-explanation format.
+TARGET_SEGMENT_SECONDS = 150   # ~2:30 aim
+MAX_SEGMENT_SECONDS = 180      # 3:00 soft target ceiling
+HARD_CEILING_SECONDS = 210     # 3:30 hard ceiling — enforced in code regardless of LLM output
+MIN_SEGMENT_SECONDS = 90       # 1:30 floor — code merges anything shorter, regardless of LLM output
+
+ROLE_NAMES = [
+    "Priya", "Arjun", "Meera", "Karthik", "Anjali",
+    "Ravi", "Divya", "Vikram", "Nisha", "Suresh",
+]
+
+REQUIRED_ITEM_FIELDS = ["question", "hint", "expln_a", "expln_b", "correct_answer"]
+
+# Style anchor: real rows from a hand-made question bank, used to ground tone
+# and register. The written rules in _segment_prompt() are authoritative for
+# exact mechanics (word counts, quote formatting) where they differ from this
+# older example.
 STYLE_EXAMPLE_ROWS = [
     {
         "question": "A junior chemist describes soap as the sodium or potassium salt of "
@@ -18,12 +32,12 @@ STYLE_EXAMPLE_ROWS = [
         "long-chain fatty acids. The long hydrocarbon chain is hydrophobic, while the "
         "carboxylate end is hydrophilic — this dual nature is what gives soap its cleaning "
         "power. Base hydrolysis of fats or oils, known as saponification, is the reaction "
-        "that produces these salts. The definition is exact and complete.",
-        "expln_b": "Incorrect. This is the accurate definition of soap. Soaps are 'sodium "
-        "or potassium salts of fatty acids' where fatty acids refer to long-chain "
-        "carboxylic acids. The molecule has a hydrophobic hydrocarbon tail and a "
-        "hydrophilic carboxylate head. Understanding this dual structure is foundational "
-        "to understanding both soap preparation and its cleansing mechanism.",
+        "that produces these salts.",
+        "expln_b": "Incorrect. This is the accurate definition of soap. Soaps are "
+        "‘sodium or potassium salts of fatty acids’ where fatty acids refer to "
+        "long-chain carboxylic acids. The molecule has a hydrophobic hydrocarbon tail and a "
+        "hydrophilic carboxylate head — that dual structure is foundational to everything "
+        "else about how soap works.",
         "correct_answer": "A",
     },
     {
@@ -31,48 +45,190 @@ STYLE_EXAMPLE_ROWS = [
         "hydrolysis of triglycerides using hydrochloric acid to produce soap and glycerol.",
         "hint": "Is acid hydrolysis the correct route for soap production?",
         "expln_a": "Incorrect. Saponification is base hydrolysis, not acid hydrolysis. A "
-        "fat or oil reacts with a base — typically sodium hydroxide — to produce soap (the "
-        "sodium salt of fatty acids) and glycerol as a by-product. Acid hydrolysis of "
-        "triglycerides yields free fatty acids and glycerol, not soap salts. Karthik has "
-        "confused two different hydrolysis pathways with very different products.",
-        "expln_b": "Correct. Karthik is wrong on both counts. Saponification uses a base "
-        "such as sodium hydroxide, not an acid. Base hydrolysis is also called "
-        "saponification — the reaction produces soap and glycerol. Acid hydrolysis splits "
-        "the ester bonds too, but gives free fatty acids rather than the sodium or "
-        "potassium salts that constitute soap. The type of reagent determines the product "
-        "entirely.",
+        "fat or oil reacts with a base — typically sodium hydroxide — to produce soap and "
+        "glycerol. Acid hydrolysis of triglycerides yields free fatty acids instead, not "
+        "soap salts. Karthik has confused two different reaction pathways.",
+        "expln_b": "Correct. Karthik has it backwards. Saponification uses a base such as "
+        "sodium hydroxide, not an acid — ‘base hydrolysis is also called "
+        "saponification,’ producing soap and glycerol. Acid hydrolysis splits the same "
+        "ester bonds but gives free fatty acids, not the salts that constitute soap.",
         "correct_answer": "B",
     },
 ]
 
-REQUIRED_ITEM_FIELDS = ["question", "hint", "expln_a", "expln_b", "correct_answer"]
-
 
 def fmt_mmss(seconds: float) -> str:
-    m = int(seconds // 60)
-    s = int(seconds % 60)
+    total = int(round(seconds))
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}:{m:02d}:{s:02d}"
     return f"{m:02d}:{s:02d}"
 
 
-def chunk_segments(segments: list[dict], chunk_seconds: int = 150):
-    """Group transcript segments into consecutive windows, labeled by each window's end timestamp."""
+def _parse_mmss(value):
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not isinstance(value, str):
+        return None
+    try:
+        parts = [int(p) for p in value.strip().split(":")]
+    except ValueError:
+        return None
+    if len(parts) == 2:
+        return parts[0] * 60 + parts[1]
+    if len(parts) == 3:
+        return parts[0] * 3600 + parts[1] * 60 + parts[2]
+    return None
+
+
+def _snap_to_nearest(target: float, candidates: list[float]) -> float:
+    return min(candidates, key=lambda c: abs(c - target))
+
+
+def _enforce_hard_ceiling(boundaries: list[float], end_times: list[float]) -> list[float]:
+    """Guarantee no segment exceeds HARD_CEILING_SECONDS, splitting at real
+    sentence-end timestamps if a proposed beat came in too long."""
+    result = []
+    prev = 0.0
+    for b in boundaries:
+        cursor = prev
+        while b - cursor > HARD_CEILING_SECONDS:
+            window = [t for t in end_times if cursor < t <= cursor + MAX_SEGMENT_SECONDS]
+            if not window:
+                window = [t for t in end_times if cursor < t <= cursor + HARD_CEILING_SECONDS]
+            if not window:
+                break  # no sentence break available to split on; accept the long segment
+            split_at = max(window)
+            result.append(split_at)
+            cursor = split_at
+        result.append(b)
+        prev = b
+    final = []
+    for b in result:
+        if not final or b > final[-1]:
+            final.append(b)
+    return final
+
+
+def _merge_short_segments(boundaries: list[float]) -> list[float]:
+    """Collapse consecutive boundaries into windows of at least
+    MIN_SEGMENT_SECONDS, so a model that (mis)proposes a boundary at every
+    sentence doesn't produce dozens of tiny segments. Always keeps the final
+    boundary intact even if the trailing remainder is short."""
+    if not boundaries:
+        return boundaries
+    merged = []
+    window_start = 0.0
+    for b in boundaries:
+        if b - window_start >= MIN_SEGMENT_SECONDS:
+            merged.append(b)
+            window_start = b
+    if not merged or merged[-1] != boundaries[-1]:
+        merged.append(boundaries[-1])
+    return merged
+
+
+def plan_segment_boundaries(segments: list[dict], client, model: str) -> list[float]:
+    """Ask the model to propose topic/teachable-beat segment boundaries, snap
+    each to a real transcript sentence-end, then merge anything too short and
+    force-split anything still over the hard ceiling — so the numeric rules
+    hold regardless of what the model actually returns."""
     if not segments:
         return []
+
+    end_times = [s["end"] for s in segments]
+    total_duration = end_times[-1]
+
+    # A video shorter than the target max doesn't need splitting at all —
+    # skip the LLM call entirely rather than risk it over-segmenting.
+    if total_duration <= MAX_SEGMENT_SECONDS:
+        return [total_duration]
+
+    transcript_block = "\n".join(f"[{fmt_mmss(s['end'])}] {s['text']}" for s in segments)
+
+    system = (
+        "You divide a lecture transcript into topic-based teaching segments "
+        "(\"teachable beats\") for an in-video pause-and-ask quiz tool.\n"
+        "- Aim for one segment per ~2-3 minutes of video (target 2:30). A "
+        f"{fmt_mmss(total_duration)} video should produce roughly "
+        f"{max(1, round(total_duration / TARGET_SEGMENT_SECONDS))} segments — "
+        "boundaries must be FAR FEWER than the number of transcript lines shown. "
+        "You are choosing a small number of major topic breaks, NOT listing every "
+        "timestamp in the transcript.\n"
+        "- Target maximum segment length is 3:00; never exceed 3:30. Never go "
+        f"below {fmt_mmss(MIN_SEGMENT_SECONDS)} either, except for the final segment.\n"
+        "- Each boundary MUST be one of the exact [mm:ss] timestamps shown in the "
+        "transcript (these mark real sentence breaks) — never invent a timestamp "
+        "that isn't listed there.\n"
+        "- The final boundary must equal the transcript's last timestamp.\n"
+        "- Prefer boundaries at natural topic changes, not mid-explanation.\n\n"
+        "Respond with a JSON object of exactly this shape and nothing else: "
+        '{"boundaries": ["mm:ss", "mm:ss", ...]}'
+    )
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": f"Transcript:\n{transcript_block}"},
+    ]
+
+    boundaries_sec = None
+    last_err = None
+    for attempt in range(RETRY_LIMIT + 1):
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=0.2,
+                response_format={"type": "json_object"},
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+            )
+            data = json.loads(resp.choices[0].message.content)
+            raw = data.get("boundaries") if isinstance(data, dict) else None
+            if not isinstance(raw, list) or not raw:
+                raise ValueError("model response missing a 'boundaries' list")
+            parsed = [_parse_mmss(b) for b in raw]
+            boundaries_sec = [b for b in parsed if b is not None]
+            if not boundaries_sec:
+                raise ValueError("no parseable boundary timestamps")
+            break
+        except Exception as e:
+            last_err = e
+            log.warning(f"  segment planning attempt {attempt + 1} failed: {e}")
+
+    if boundaries_sec is None:
+        log.warning(f"  segment planning failed after retries ({last_err}); using fixed windows")
+        boundaries_sec = list(
+            range(TARGET_SEGMENT_SECONDS, int(total_duration) + 1, TARGET_SEGMENT_SECONDS)
+        )
+
+    snapped = sorted(set(_snap_to_nearest(b, end_times) for b in boundaries_sec))
+    if not snapped or snapped[-1] != total_duration:
+        snapped.append(total_duration)
+
+    merged = _merge_short_segments(snapped)
+    return _enforce_hard_ceiling(merged, end_times)
+
+
+def chunk_segments_by_boundaries(segments: list[dict], boundaries: list[float]):
+    """Group transcript segments into finalized (end_time, text) chunks matching
+    the planned boundaries."""
+    if not boundaries:
+        return [(segments[-1]["end"], " ".join(s["text"] for s in segments))] if segments else []
     chunks = []
-    window_end = chunk_seconds
+    b_idx = 0
     current = []
     for seg in segments:
         current.append(seg)
-        if seg["end"] >= window_end:
-            chunks.append((seg["end"], current))
+        if b_idx < len(boundaries) and seg["end"] >= boundaries[b_idx] - 1e-6:
+            chunks.append((boundaries[b_idx], " ".join(s["text"] for s in current)))
             current = []
-            window_end = seg["end"] + chunk_seconds
+            b_idx += 1
     if current:
-        chunks.append((current[-1]["end"], current))
-    return [(end, " ".join(s["text"] for s in segs)) for end, segs in chunks]
+        chunks.append((boundaries[-1], " ".join(s["text"] for s in current)))
+    return chunks
 
 
-def _system_prompt(n_questions: int) -> str:
+def _segment_prompt(n_questions: int, true_ratio_so_far: float, named_position: int) -> str:
     examples = "\n\n".join(
         f"Example:\nQuestion: {r['question']}\nHint: {r['hint']}\n"
         f"Option A: True | Expln-A: {r['expln_a']}\n"
@@ -80,22 +236,51 @@ def _system_prompt(n_questions: int) -> str:
         f"Correct Answer: {r['correct_answer']}"
         for r in STYLE_EXAMPLE_ROWS
     )
-    return (
-        "You write exam-style question-bank items for a lecture transcript segment.\n"
-        "Each item is a TRUE/FALSE statement-judgment question: attribute a plausible "
-        "statement about the transcript's content to a persona (a student, engineer, "
-        "researcher, etc.) — the statement may be entirely correct or contain a subtle "
-        "factual error. Option A is always \"True\", Option B is always \"False\". Write a "
-        "3-5 sentence explanation for each option that quotes or paraphrases the "
-        "transcript, explaining why that option is right or wrong. correct_answer is "
-        "exactly one of \"A\" or \"B\".\n\n"
-        f"{examples}\n\n"
-        f"Generate exactly {n_questions} such questions strictly from the transcript "
-        "segment given by the user, covering different points in it. Respond with a JSON "
-        "object of exactly this shape and nothing else: "
-        '{"questions": [{"question": "...", "hint": "...", "expln_a": "...", '
-        '"expln_b": "...", "correct_answer": "A"}, ...]}'
-    )
+    names = ", ".join(ROLE_NAMES)
+
+    if true_ratio_so_far > 0.55:
+        balance_note = (
+            f"So far {true_ratio_so_far:.0%} of correct answers across this file have been "
+            "True — lean toward writing more False (misapplied) scenarios in this batch to "
+            "rebalance toward 50/50."
+        )
+    elif true_ratio_so_far < 0.45:
+        balance_note = (
+            f"So far only {true_ratio_so_far:.0%} of correct answers across this file have "
+            "been True — lean toward writing more True (correctly applied) scenarios in this "
+            "batch to rebalance toward 50/50."
+        )
+    else:
+        balance_note = "Keep a natural, roughly even True/False split in this batch."
+
+    return f"""You write an in-class "pause-and-ask" question bank for a video learning platform, from one topic segment of a lecture transcript.
+
+STYLE ANCHOR (tone/register reference — the rules below take precedence wherever they differ, e.g. exact word counts and quote formatting):
+{examples}
+
+RULES FOR THIS BATCH ({n_questions} questions):
+- 100% True/False format. Option A is always "True", Option B is always "False".
+- The 1st question is a straightforward recall check; the remaining {n_questions - 1} require application or analysis of the idea, not just memory.
+- Roughly half the questions should be straightforwardly factual, and half should have a small twist that surfaces a common misconception.
+- Every question is SCENARIO-BASED: a fictional decision-maker (founder, CEO, developer, team lead, junior engineer, senior engineer) applying the segment's idea correctly or misapplying it. The reader judges which.
+- NAMING IS RARE: ONLY question #{named_position} may use a name (prefer: {names}). Every other question in this batch MUST use a plain unnamed role only ("a developer", "a team lead") — do not name any of them.
+- Compact: 15-30 words median per question, 38-word hard ceiling for prose-only questions. For code-related content, a fenced markdown code block (3-6 lines) is allowed within the question.
+- The scenario must stand alone — never write "the lecture," "the speaker," "the video," "in the lecture," etc.
+- Do NOT end the question with a phrase that signals the answer (e.g. "...which matches what was taught") — present the scenario and let the reader judge.
+- {balance_note}
+
+HINT: a short, pointed question (5-15 words) that signals what to check — never gives away the answer.
+
+EXPLANATIONS (expln_a and expln_b): BOTH are full teaching moments, regardless of which option is correct:
+- HARD REQUIREMENT: each of expln_a and expln_b must be between 40 and 90 words — count before finalizing. Under 40 words is not acceptable; pad with genuine teaching content (why it matters, what the correct concept is), not filler.
+- Start with exactly "Correct." or "Incorrect." (with the period).
+- Re-teach the underlying concept, not just judge the scenario. Avoid saying "the lecture" here too — quote the transcript directly instead of narrating that it was said.
+- Include one short direct quote from the transcript (5-25 words), wrapped in curly typographic quotes ‘like this’ — NOT straight quotes. Keep ordinary apostrophes in contractions/possessives straight (don't, Priya's).
+- End with a sharp one-line summary where it fits naturally.
+- Tone: direct, slightly punchy, no hedging.
+
+Respond with a JSON object of exactly this shape and nothing else:
+{{"questions": [{{"question": "...", "hint": "...", "expln_a": "...", "expln_b": "...", "correct_answer": "A"}}, ...]}}"""
 
 
 def _validate_questions(items, n_questions):
@@ -110,10 +295,18 @@ def _validate_questions(items, n_questions):
     return valid[:n_questions]
 
 
-def generate_questions_for_chunk(chunk_text: str, n_questions: int, client, model: str):
+def generate_questions_for_segment(
+    segment_text: str,
+    n_questions: int,
+    true_ratio_so_far: float,
+    segment_index: int,
+    client,
+    model: str,
+):
+    named_position = (segment_index % n_questions) + 1
     messages = [
-        {"role": "system", "content": _system_prompt(n_questions)},
-        {"role": "user", "content": f"Transcript segment:\n{chunk_text}"},
+        {"role": "system", "content": _segment_prompt(n_questions, true_ratio_so_far, named_position)},
+        {"role": "user", "content": f"Transcript segment:\n{segment_text}"},
     ]
     last_err = None
     for attempt in range(RETRY_LIMIT + 1):
@@ -121,7 +314,7 @@ def generate_questions_for_chunk(chunk_text: str, n_questions: int, client, mode
             resp = client.chat.completions.create(
                 model=model,
                 messages=messages,
-                temperature=0.4,
+                temperature=0.5,
                 response_format={"type": "json_object"},
                 extra_body={"chat_template_kwargs": {"enable_thinking": False}},
             )
@@ -132,7 +325,7 @@ def generate_questions_for_chunk(chunk_text: str, n_questions: int, client, mode
             return _validate_questions(items, n_questions)
         except Exception as e:
             last_err = e
-            log.warning(f"  chunk generation attempt {attempt + 1} failed: {e}")
+            log.warning(f"  segment generation attempt {attempt + 1} failed: {e}")
     raise RuntimeError(f"question generation failed after retries: {last_err}")
 
 
@@ -142,15 +335,22 @@ def generate_question_bank(
     client,
     model: str,
     questions_per_segment: int = 5,
-    chunk_seconds: int = 150,
     progress_cb=None,
 ) -> list[dict]:
-    chunks = chunk_segments(segments, chunk_seconds)
+    if progress_cb:
+        progress_cb(0, 0)  # signal "planning segments" phase before per-chunk progress starts
+
+    boundaries = plan_segment_boundaries(segments, client, model)
+    chunks = chunk_segments_by_boundaries(segments, boundaries)
+
     rows = []
     sno = 1
+    true_count = 0
+    total_count = 0
     for idx, (end_ts, chunk_text) in enumerate(chunks, start=1):
-        questions = generate_questions_for_chunk(
-            chunk_text, questions_per_segment, client, model
+        true_ratio = (true_count / total_count) if total_count else 0.5
+        questions = generate_questions_for_segment(
+            chunk_text, questions_per_segment, true_ratio, idx, client, model
         )
         for q in questions:
             values = {
@@ -171,6 +371,9 @@ def generate_question_bank(
             }
             rows.append({col: values.get(col, "") for col in template_columns})
             sno += 1
+            total_count += 1
+            if q["correct_answer"] == "A":
+                true_count += 1
         if progress_cb:
             progress_cb(idx, len(chunks))
     return rows

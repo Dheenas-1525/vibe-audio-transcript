@@ -1,6 +1,6 @@
 # ViBe Audio Transcript
 
-**v1.3.2** — YouTube URL → timestamped transcript → template-driven question bank CSV.
+**v1.4.0** — YouTube URL → timestamped transcript → template-driven question bank CSV.
 
 Paste a YouTube URL, get a timestamped transcript (download as TXT / SRT / VTT). Upload a
 question-bank template CSV and generate matching questions from that transcript using a
