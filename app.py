@@ -208,12 +208,13 @@ def run_qb_job(job_id: str, template_columns: list[str], questions_per_segment: 
             job["qb_progress"] = {"done": done, "total": total}
             save_job(job_id)
 
-        rows = qb_generator.generate_question_bank(
+        rows, summary = qb_generator.generate_question_bank(
             job["segments"], template_columns, client, VLLM_MODEL,
             questions_per_segment=questions_per_segment, progress_cb=progress,
         )
         job["qb_rows"] = rows
         job["qb_columns"] = template_columns
+        job["qb_summary"] = summary
         job["qb_status"] = "done"
         save_job(job_id)
     except Exception as e:
@@ -254,6 +255,7 @@ def qb_status(job_id: str):
         "qb_status": job.get("qb_status"),
         "qb_progress": job.get("qb_progress"),
         "qb_error": job.get("qb_error"),
+        "qb_summary": job.get("qb_summary"),
     }
 
 

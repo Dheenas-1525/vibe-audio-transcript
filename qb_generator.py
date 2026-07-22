@@ -2,8 +2,21 @@ import csv
 import io
 import json
 import logging
+import re
 
 log = logging.getLogger(__name__)
+
+# Safety net for the curly-quote rule: converts a straight-quoted 'phrase'
+# into curly ‘phrase’. Only matches a genuine open/close PAIR (3-200 chars,
+# no embedded newline or further apostrophe), so a lone contraction/possessive
+# apostrophe (don't, Priya's) never matches — it has no closing partner.
+# Primary defense is still the prompt instructing the model to emit curly
+# quotes natively; this only catches the cases where it doesn't.
+_QUOTE_PAIR = re.compile(r"(?<!\w)'([^'\n]{3,200}?)'(?!\w)")
+
+
+def _wrap_curly_quotes(text: str) -> str:
+    return _QUOTE_PAIR.sub("‘\\1’", text)
 
 RETRY_LIMIT = 2
 
@@ -86,10 +99,13 @@ def _snap_to_nearest(target: float, candidates: list[float]) -> float:
     return min(candidates, key=lambda c: abs(c - target))
 
 
-def _enforce_hard_ceiling(boundaries: list[float], end_times: list[float]) -> list[float]:
+def _enforce_hard_ceiling(boundaries: list[float], end_times: list[float]):
     """Guarantee no segment exceeds HARD_CEILING_SECONDS, splitting at real
-    sentence-end timestamps if a proposed beat came in too long."""
+    sentence-end timestamps if a proposed beat came in too long. Returns
+    (final_boundaries, forced_split_values) so callers can report which
+    splits were code-forced rather than proposed by the model."""
     result = []
+    forced = set()
     prev = 0.0
     for b in boundaries:
         cursor = prev
@@ -101,6 +117,7 @@ def _enforce_hard_ceiling(boundaries: list[float], end_times: list[float]) -> li
                 break  # no sentence break available to split on; accept the long segment
             split_at = max(window)
             result.append(split_at)
+            forced.add(split_at)
             cursor = split_at
         result.append(b)
         prev = b
@@ -108,7 +125,7 @@ def _enforce_hard_ceiling(boundaries: list[float], end_times: list[float]) -> li
     for b in result:
         if not final or b > final[-1]:
             final.append(b)
-    return final
+    return final, forced
 
 
 def _merge_short_segments(boundaries: list[float]) -> list[float]:
@@ -129,13 +146,14 @@ def _merge_short_segments(boundaries: list[float]) -> list[float]:
     return merged
 
 
-def plan_segment_boundaries(segments: list[dict], client, model: str) -> list[float]:
+def plan_segment_boundaries(segments: list[dict], client, model: str):
     """Ask the model to propose topic/teachable-beat segment boundaries, snap
     each to a real transcript sentence-end, then merge anything too short and
     force-split anything still over the hard ceiling — so the numeric rules
-    hold regardless of what the model actually returns."""
+    hold regardless of what the model actually returns. Returns
+    (boundaries, forced_split_values)."""
     if not segments:
-        return []
+        return [], set()
 
     end_times = [s["end"] for s in segments]
     total_duration = end_times[-1]
@@ -143,7 +161,7 @@ def plan_segment_boundaries(segments: list[dict], client, model: str) -> list[fl
     # A video shorter than the target max doesn't need splitting at all —
     # skip the LLM call entirely rather than risk it over-segmenting.
     if total_duration <= MAX_SEGMENT_SECONDS:
-        return [total_duration]
+        return [total_duration], set()
 
     transcript_block = "\n".join(f"[{fmt_mmss(s['end'])}] {s['text']}" for s in segments)
 
@@ -207,6 +225,58 @@ def plan_segment_boundaries(segments: list[dict], client, model: str) -> list[fl
 
     merged = _merge_short_segments(snapped)
     return _enforce_hard_ceiling(merged, end_times)
+
+
+BANNED_META_PHRASES = ["the lecture", "the video", "the speaker", "in the lecture"]
+
+
+def build_summary(rows: list[dict], boundaries: list[float], forced_splits: set, video_duration: float) -> dict:
+    """Runs the mechanical parts of the spec's self-check list and returns a
+    report — segment/question counts, A/B split, max segment length, a
+    sample row, and any compliance warnings found (word counts, banned
+    meta-phrases, A/B skew, forced splits)."""
+    question_count = len(rows)
+    ab_counts = {"A": 0, "B": 0}
+    for r in rows:
+        ans = r.get("Correct Answer")
+        if ans in ab_counts:
+            ab_counts[ans] += 1
+
+    spans = []
+    prev = 0.0
+    for b in boundaries:
+        spans.append(b - prev)
+        prev = b
+    max_span = max(spans) if spans else 0.0
+
+    warnings = []
+    if boundaries and abs(boundaries[-1] - video_duration) > 1e-3:
+        warnings.append("Last anchor does not equal the video's final timestamp.")
+    if max_span > HARD_CEILING_SECONDS + 1e-6:
+        warnings.append(f"A segment exceeded the 3:30 hard ceiling ({fmt_mmss(max_span)}).")
+    if question_count:
+        a_ratio = ab_counts["A"] / question_count
+        if not (0.45 <= a_ratio <= 0.55):
+            warnings.append(f"A/B balance is {a_ratio:.0%} True, outside the 45-55% target.")
+    for r in rows:
+        q_lower = r.get("Question", "").lower()
+        if any(p in q_lower for p in BANNED_META_PHRASES):
+            warnings.append(f"S.No. {r.get('S.No.')}: question contains a meta-reference (\"the lecture\"/\"the video\").")
+        for col in ("Expln-A", "Expln-B"):
+            wc = len(r.get(col, "").split())
+            if not (40 <= wc <= 90):
+                warnings.append(f"S.No. {r.get('S.No.')}: {col} is {wc} words (outside 40-90).")
+
+    return {
+        "video_length": fmt_mmss(video_duration),
+        "segment_count": len(boundaries),
+        "question_count": question_count,
+        "ab_split": ab_counts,
+        "max_segment_length": fmt_mmss(max_span),
+        "forced_split_count": len(forced_splits),
+        "sample_row": rows[0] if rows else None,
+        "warnings": warnings,
+    }
 
 
 def chunk_segments_by_boundaries(segments: list[dict], boundaries: list[float]):
@@ -292,6 +362,9 @@ def _validate_questions(items, n_questions):
     ]
     if not valid:
         raise ValueError("no valid question items in model response")
+    for item in valid:
+        item["expln_a"] = _wrap_curly_quotes(item["expln_a"])
+        item["expln_b"] = _wrap_curly_quotes(item["expln_b"])
     return valid[:n_questions]
 
 
@@ -336,11 +409,13 @@ def generate_question_bank(
     model: str,
     questions_per_segment: int = 5,
     progress_cb=None,
-) -> list[dict]:
+):
+    """Returns (rows, summary) — summary is the self-check report described
+    in build_summary()."""
     if progress_cb:
         progress_cb(0, 0)  # signal "planning segments" phase before per-chunk progress starts
 
-    boundaries = plan_segment_boundaries(segments, client, model)
+    boundaries, forced_splits = plan_segment_boundaries(segments, client, model)
     chunks = chunk_segments_by_boundaries(segments, boundaries)
 
     rows = []
@@ -376,7 +451,10 @@ def generate_question_bank(
                 true_count += 1
         if progress_cb:
             progress_cb(idx, len(chunks))
-    return rows
+
+    video_duration = segments[-1]["end"] if segments else 0.0
+    summary = build_summary(rows, boundaries, forced_splits, video_duration)
+    return rows, summary
 
 
 def rows_to_csv_str(rows: list[dict], template_columns: list[str]) -> str:

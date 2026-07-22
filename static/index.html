@@ -57,6 +57,7 @@
     <div id="qb-download" style="display:none; margin-top:16px;">
       <a id="qb-dl" download>Download Question Bank CSV</a>
     </div>
+    <div id="qb-summary" style="display:none; margin-top:16px; font-size:.9rem; color:#c3c6db;"></div>
   </div>
 <script>
 const $ = id => document.getElementById(id);
@@ -125,6 +126,7 @@ $("qb-go").onclick = async () => {
   if (!file || !currentJobId) return;
   $("qb-go").disabled = true;
   $("qb-download").style.display = "none";
+  $("qb-summary").style.display = "none";
   $("qb-status").textContent = "Starting...";
   const fd = new FormData();
   fd.append("template", file);
@@ -160,8 +162,29 @@ function pollQB(id) {
       $("qb-dl").href = `/api/download-questions/${id}`;
       $("qb-download").style.display = "block";
       $("qb-go").disabled = false;
+      renderQBSummary(job.qb_summary);
     }
   }, 1500);
+}
+
+function renderQBSummary(s) {
+  if (!s) return;
+  const esc = t => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  let html = `<div style="border-top:1px solid #2a2e3b;padding-top:12px;">`
+    + `Video ${esc(s.video_length)} → ${esc(s.segment_count)} segment(s), ${esc(s.question_count)} question(s) `
+    + `&middot; A/B split ${esc(s.ab_split.A)}/${esc(s.ab_split.B)} `
+    + `&middot; longest segment ${esc(s.max_segment_length)}`
+    + (s.forced_split_count ? ` &middot; ${esc(s.forced_split_count)} segment(s) code-force-split (too long)` : "")
+    + `</div>`;
+  if (s.warnings && s.warnings.length) {
+    html += `<div style="margin-top:8px;color:#e2a53a;">Self-check flagged ${s.warnings.length} item(s):<ul style="margin:4px 0 0 18px;padding:0;">`
+      + s.warnings.map(w => `<li>${esc(w)}</li>`).join("")
+      + `</ul></div>`;
+  } else {
+    html += `<div style="margin-top:8px;color:#5fd88f;">Self-check: no issues flagged.</div>`;
+  }
+  $("qb-summary").innerHTML = html;
+  $("qb-summary").style.display = "block";
 }
 </script>
 </body>
