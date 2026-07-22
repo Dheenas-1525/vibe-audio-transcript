@@ -1,11 +1,11 @@
 # ViBe Audio Transcript
 
-**v1.7.0** — YouTube URL → timestamped transcript → template-driven question bank CSV.
+**v1.8.0** — YouTube URL → timestamped transcript → ViBe question bank CSV.
 
-Paste a YouTube URL, get a timestamped transcript (download as TXT / SRT / VTT). Upload a
-question-bank template CSV and generate matching questions from that transcript using a
-self-hosted LLM (Qwen3, via vLLM's OpenAI-compatible API) — download the result as a CSV
-that matches your template's exact columns.
+Paste a YouTube URL, get a timestamped transcript (download as TXT / SRT / VTT). Click
+"Generate Question Bank" to generate scenario-based true/false questions from that
+transcript using a self-hosted LLM (Qwen3, via vLLM's OpenAI-compatible API) — download
+the result as a CSV matching ViBe's fixed 14-column question-bank format.
 
 Transcription runs fully local (`yt-dlp` + `faster-whisper`, no external API). Question
 generation calls out to your own vLLM server — nothing else leaves the machine.

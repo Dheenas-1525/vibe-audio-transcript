@@ -1,5 +1,3 @@
-import csv
-import io
 import json
 import os
 import re
@@ -10,7 +8,7 @@ import threading
 import uuid
 
 import yt_dlp
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -223,25 +221,22 @@ def run_qb_job(job_id: str, template_columns: list[str], questions_per_segment: 
         save_job(job_id)
 
 
+class GenerateQuestionsRequest(BaseModel):
+    questions_per_segment: int = 5
+
+
 @app.post("/api/generate-questions/{job_id}")
-async def generate_questions(
-    job_id: str,
-    template: UploadFile = File(...),
-    questions_per_segment: int = Form(5),
-):
+def generate_questions(job_id: str, req: GenerateQuestionsRequest = GenerateQuestionsRequest()):
     job = jobs.get(job_id)
     if not job or job.get("status") != "done":
         raise HTTPException(404, "Transcript not ready")
-    content = (await template.read()).decode("utf-8-sig")
-    try:
-        template_columns = next(csv.reader(io.StringIO(content)))
-    except StopIteration:
-        raise HTTPException(400, "Template CSV is empty")
     job["qb_status"] = "queued"
     job["qb_progress"] = {"done": 0, "total": 0}
     save_job(job_id)
     threading.Thread(
-        target=run_qb_job, args=(job_id, template_columns, questions_per_segment), daemon=True
+        target=run_qb_job,
+        args=(job_id, qb_generator.TEMPLATE_COLUMNS, req.questions_per_segment),
+        daemon=True,
     ).start()
     return {"job_id": job_id}
 

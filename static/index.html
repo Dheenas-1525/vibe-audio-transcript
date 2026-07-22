@@ -48,7 +48,6 @@
   </div>
   <div class="card" id="qb-card" style="display:none; margin-top:20px;">
     <div class="row">
-      <input id="qb-template" type="file" accept=".csv" style="flex:2; padding:9px 14px;" />
       <input id="qb-count" type="number" value="5" min="1" max="20" title="Questions per segment"
              style="flex:0 0 80px; padding:9px 14px;" />
       <button id="qb-go">Generate Question Bank</button>
@@ -122,17 +121,17 @@ function poll(id) {
 }
 
 $("qb-go").onclick = async () => {
-  const file = $("qb-template").files[0];
-  if (!file || !currentJobId) return;
+  if (!currentJobId) return;
   $("qb-go").disabled = true;
   $("qb-download").style.display = "none";
   $("qb-summary").style.display = "none";
   $("qb-status").textContent = "Starting...";
-  const fd = new FormData();
-  fd.append("template", file);
-  fd.append("questions_per_segment", $("qb-count").value || 5);
   try {
-    const r = await fetch(`/api/generate-questions/${currentJobId}`, { method: "POST", body: fd });
+    const r = await fetch(`/api/generate-questions/${currentJobId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ questions_per_segment: Number($("qb-count").value) || 5 }),
+    });
     if (!r.ok) throw new Error((await r.json()).detail);
     pollQB(currentJobId);
   } catch (e) {

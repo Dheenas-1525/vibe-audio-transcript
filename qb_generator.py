@@ -6,6 +6,15 @@ import re
 
 log = logging.getLogger(__name__)
 
+# The ViBe question-bank CSV's fixed 14-column structure. Generation is
+# hardcoded to this exact schema (Option A/B literals, C/D always blank,
+# etc.), so this is the only template in practice — no upload needed.
+TEMPLATE_COLUMNS = [
+    "Segment", "Question Timestamp [mm:ss]", "S.No.", "Question", "Hint",
+    "Option A", "Expln-A", "Option B", "Expln-B",
+    "Option C", "Expln-C", "Option D", "Expln-D", "Correct Answer",
+]
+
 # Safety net for the curly-quote rule: converts a straight-quoted 'phrase'
 # into curly ‘phrase’. Only matches a genuine open/close PAIR (3-200 chars,
 # no embedded newline or further apostrophe), so a lone contraction/possessive
