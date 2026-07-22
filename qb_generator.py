@@ -95,15 +95,37 @@ def _parse_mmss(value):
     return None
 
 
-def _snap_to_nearest(target: float, candidates: list[float]) -> float:
+def _is_terminal_punctuation(text: str) -> bool:
+    """True if text ends on a real sentence break (. ! ?), ignoring any
+    trailing quote/bracket/space around the punctuation."""
+    stripped = text.rstrip().rstrip('"\'”’)]').rstrip()
+    return stripped.endswith((".", "!", "?"))
+
+
+def _snap_to_nearest(target: float, candidates: list[float], punctuated: set = None, tolerance: float = 20.0) -> float:
+    """Snap to the nearest candidate timestamp, preferring one that lands on
+    terminal punctuation (a real sentence break) if one exists within
+    `tolerance` seconds of the target."""
+    if punctuated:
+        near_punct = [c for c in candidates if c in punctuated and abs(c - target) <= tolerance]
+        if near_punct:
+            return min(near_punct, key=lambda c: abs(c - target))
     return min(candidates, key=lambda c: abs(c - target))
 
 
-def _enforce_hard_ceiling(boundaries: list[float], end_times: list[float]):
+def _pick_split_point(window: list[float], punctuated: set) -> float:
+    """Among candidate split points, prefer the latest one that lands on
+    terminal punctuation; fall back to the latest overall if none qualify."""
+    punct_window = [t for t in window if t in punctuated]
+    return max(punct_window) if punct_window else max(window)
+
+
+def _enforce_hard_ceiling(boundaries: list[float], end_times: list[float], punctuated: set):
     """Guarantee no segment exceeds HARD_CEILING_SECONDS, splitting at real
-    sentence-end timestamps if a proposed beat came in too long. Returns
-    (final_boundaries, forced_split_values) so callers can report which
-    splits were code-forced rather than proposed by the model."""
+    sentence-end timestamps (preferring ones on terminal punctuation) if a
+    proposed beat came in too long. Returns (final_boundaries,
+    forced_split_values) so callers can report which splits were code-forced
+    rather than proposed by the model."""
     result = []
     forced = set()
     prev = 0.0
@@ -115,7 +137,7 @@ def _enforce_hard_ceiling(boundaries: list[float], end_times: list[float]):
                 window = [t for t in end_times if cursor < t <= cursor + HARD_CEILING_SECONDS]
             if not window:
                 break  # no sentence break available to split on; accept the long segment
-            split_at = max(window)
+            split_at = _pick_split_point(window, punctuated)
             result.append(split_at)
             forced.add(split_at)
             cursor = split_at
@@ -148,14 +170,16 @@ def _merge_short_segments(boundaries: list[float]) -> list[float]:
 
 def plan_segment_boundaries(segments: list[dict], client, model: str):
     """Ask the model to propose topic/teachable-beat segment boundaries, snap
-    each to a real transcript sentence-end, then merge anything too short and
-    force-split anything still over the hard ceiling — so the numeric rules
-    hold regardless of what the model actually returns. Returns
-    (boundaries, forced_split_values)."""
+    each to a real transcript sentence-end (preferring ones on terminal
+    punctuation), then merge anything too short and force-split anything
+    still over the hard ceiling — so the numeric rules hold regardless of
+    what the model actually returns. Returns (boundaries, forced_split_values).
+    """
     if not segments:
         return [], set()
 
     end_times = [s["end"] for s in segments]
+    punctuated = {s["end"] for s in segments if _is_terminal_punctuation(s["text"])}
     total_duration = end_times[-1]
 
     # A video shorter than the target max doesn't need splitting at all —
@@ -219,22 +243,44 @@ def plan_segment_boundaries(segments: list[dict], client, model: str):
             range(TARGET_SEGMENT_SECONDS, int(total_duration) + 1, TARGET_SEGMENT_SECONDS)
         )
 
-    snapped = sorted(set(_snap_to_nearest(b, end_times) for b in boundaries_sec))
+    snapped = sorted(set(_snap_to_nearest(b, end_times, punctuated) for b in boundaries_sec))
     if not snapped or snapped[-1] != total_duration:
         snapped.append(total_duration)
 
     merged = _merge_short_segments(snapped)
-    return _enforce_hard_ceiling(merged, end_times)
+    return _enforce_hard_ceiling(merged, end_times, punctuated)
 
 
 BANNED_META_PHRASES = ["the lecture", "the video", "the speaker", "in the lecture"]
 
+# Heuristic: phrases near the end of a question that signal the answer
+# instead of letting the reader judge for themselves.
+CLOSING_SIGNAL_PHRASES = [
+    "matches what was taught", "matches the lecture", "as taught", "as described",
+    "as explained", "correctly reflects", "accurately represents", "in line with",
+    "consistent with what was", "which is correct", "which is incorrect",
+]
 
-def build_summary(rows: list[dict], boundaries: list[float], forced_splits: set, video_duration: float) -> dict:
-    """Runs the mechanical parts of the spec's self-check list and returns a
+
+def _ends_with_signal_phrase(question: str) -> bool:
+    tail = " ".join(question.lower().split()[-10:])
+    return any(p in tail for p in CLOSING_SIGNAL_PHRASES)
+
+
+def build_summary(
+    rows: list[dict],
+    boundaries: list[float],
+    forced_splits: set,
+    punctuated: set,
+    video_duration: float,
+    questions_per_segment: int,
+) -> dict:
+    """Runs the spec's self-check list against the final output and returns a
     report — segment/question counts, A/B split, max segment length, a
-    sample row, and any compliance warnings found (word counts, banned
-    meta-phrases, A/B skew, forced splits)."""
+    sample row, and any compliance warnings found. Some of these rules are
+    also enforced as retry triggers in _validate_questions (count, prefix,
+    banned phrases); they're re-checked here too as a final, honest report
+    of what actually shipped, including any item that survived retries."""
     question_count = len(rows)
     ab_counts = {"A": 0, "B": 0}
     for r in rows:
@@ -254,18 +300,42 @@ def build_summary(rows: list[dict], boundaries: list[float], forced_splits: set,
         warnings.append("Last anchor does not equal the video's final timestamp.")
     if max_span > HARD_CEILING_SECONDS + 1e-6:
         warnings.append(f"A segment exceeded the 3:30 hard ceiling ({fmt_mmss(max_span)}).")
+    elif max_span > MAX_SEGMENT_SECONDS + 1e-6:
+        warnings.append(f"A segment exceeded the 3:00 target (within the 3:30 ceiling): {fmt_mmss(max_span)}.")
+    for b in boundaries:
+        if b not in punctuated:
+            warnings.append(f"Anchor at {fmt_mmss(b)} does not land on terminal punctuation.")
     if question_count:
         a_ratio = ab_counts["A"] / question_count
         if not (0.45 <= a_ratio <= 0.55):
             warnings.append(f"A/B balance is {a_ratio:.0%} True, outside the 45-55% target.")
+
+    by_segment: dict[str, list[dict]] = {}
     for r in rows:
-        q_lower = r.get("Question", "").lower()
+        by_segment.setdefault(r.get("Segment"), []).append(r)
+    for seg, seg_rows in by_segment.items():
+        if len(seg_rows) != questions_per_segment:
+            warnings.append(f"Segment {seg} has {len(seg_rows)} questions, expected {questions_per_segment}.")
+        timestamps = {r.get("Question Timestamp [mm:ss]") for r in seg_rows}
+        if len(timestamps) > 1:
+            warnings.append(f"Segment {seg} questions don't all share one timestamp: {timestamps}.")
+
+    for r in rows:
+        q = r.get("Question", "")
+        q_lower = q.lower()
         if any(p in q_lower for p in BANNED_META_PHRASES):
             warnings.append(f"S.No. {r.get('S.No.')}: question contains a meta-reference (\"the lecture\"/\"the video\").")
+        if _ends_with_signal_phrase(q):
+            warnings.append(f"S.No. {r.get('S.No.')}: question ends with an answer-signaling phrase.")
         for col in ("Expln-A", "Expln-B"):
-            wc = len(r.get(col, "").split())
+            text = r.get(col, "")
+            wc = len(text.split())
             if not (40 <= wc <= 90):
                 warnings.append(f"S.No. {r.get('S.No.')}: {col} is {wc} words (outside 40-90).")
+            if not (text.startswith("Correct.") or text.startswith("Incorrect.")):
+                warnings.append(f"S.No. {r.get('S.No.')}: {col} doesn't start with \"Correct.\"/\"Incorrect.\".")
+        if r.get("Correct Answer") not in ("A", "B"):
+            warnings.append(f"S.No. {r.get('S.No.')}: Correct Answer is not A or B.")
 
     return {
         "video_length": fmt_mmss(video_duration),
@@ -354,18 +424,49 @@ Respond with a JSON object of exactly this shape and nothing else:
 
 
 def _validate_questions(items, n_questions):
+    """Raises (triggering a retry in the caller) for violations the model is
+    reliably able to fix on a retry: wrong item count, missing an
+    explanation prefix, or a banned meta-reference in the question. Word
+    count and closing-signal-phrase are intentionally NOT retry triggers —
+    those are softer/less reliably fixable and risk exhausting retries and
+    failing the whole segment; they're reported instead in build_summary()."""
     valid = [
         item for item in items
         if isinstance(item, dict)
         and all(field in item for field in REQUIRED_ITEM_FIELDS)
         and item["correct_answer"] in ("A", "B")
     ]
-    if not valid:
-        raise ValueError("no valid question items in model response")
+    if len(valid) < n_questions:
+        raise ValueError(f"got {len(valid)} valid items, need {n_questions}")
+
+    valid = valid[:n_questions]
+    for item in valid:
+        for field in ("expln_a", "expln_b"):
+            if not (item[field].startswith("Correct.") or item[field].startswith("Incorrect.")):
+                raise ValueError(f"{field} doesn't start with 'Correct.'/'Incorrect.'")
+        if any(p in item["question"].lower() for p in BANNED_META_PHRASES):
+            raise ValueError("question contains a banned meta-reference")
+
     for item in valid:
         item["expln_a"] = _wrap_curly_quotes(item["expln_a"])
         item["expln_b"] = _wrap_curly_quotes(item["expln_b"])
-    return valid[:n_questions]
+    return valid
+
+
+def _soft_violation_count(items) -> int:
+    """Counts violations of rules that are real but not worth failing the
+    whole segment over (word count, closing signal phrase) — used to pick
+    the best attempt across retries rather than accepting the first one
+    that merely passes the hard checks in _validate_questions."""
+    count = 0
+    for item in items:
+        for field in ("expln_a", "expln_b"):
+            wc = len(item[field].split())
+            if not (40 <= wc <= 90):
+                count += 1
+        if _ends_with_signal_phrase(item["question"]):
+            count += 1
+    return count
 
 
 def generate_questions_for_segment(
@@ -381,7 +482,7 @@ def generate_questions_for_segment(
         {"role": "system", "content": _segment_prompt(n_questions, true_ratio_so_far, named_position)},
         {"role": "user", "content": f"Transcript segment:\n{segment_text}"},
     ]
-    last_err = None
+    best, best_score, last_err = None, None, None
     for attempt in range(RETRY_LIMIT + 1):
         try:
             resp = client.chat.completions.create(
@@ -395,10 +496,22 @@ def generate_questions_for_segment(
             items = data.get("questions") if isinstance(data, dict) else None
             if not isinstance(items, list):
                 raise ValueError("model response missing a 'questions' array")
-            return _validate_questions(items, n_questions)
+            valid = _validate_questions(items, n_questions)  # raises on hard violations (count/prefix/banned phrase)
         except Exception as e:
             last_err = e
             log.warning(f"  segment generation attempt {attempt + 1} failed: {e}")
+            continue
+
+        score = _soft_violation_count(valid)
+        if best is None or score < best_score:
+            best, best_score = valid, score
+        if score == 0:
+            return valid
+        log.warning(f"  segment generation attempt {attempt + 1}: {score} soft violation(s) (word count/closing phrase)")
+
+    if best is not None:
+        log.warning(f"  segment generation: accepting best-effort batch with {best_score} soft violation(s) after retries")
+        return best
     raise RuntimeError(f"question generation failed after retries: {last_err}")
 
 
@@ -453,7 +566,8 @@ def generate_question_bank(
             progress_cb(idx, len(chunks))
 
     video_duration = segments[-1]["end"] if segments else 0.0
-    summary = build_summary(rows, boundaries, forced_splits, video_duration)
+    punctuated = {s["end"] for s in segments if _is_terminal_punctuation(s["text"])}
+    summary = build_summary(rows, boundaries, forced_splits, punctuated, video_duration, questions_per_segment)
     return rows, summary
 
 
