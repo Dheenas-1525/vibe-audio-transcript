@@ -515,6 +515,84 @@ def generate_questions_for_segment(
     raise RuntimeError(f"question generation failed after retries: {last_err}")
 
 
+def _range_distance(word_count: int) -> int:
+    """0 if within [40, 90], otherwise how many words away from the nearest edge."""
+    if word_count < 40:
+        return 40 - word_count
+    if word_count > 90:
+        return word_count - 90
+    return 0
+
+
+def rewrite_explanation(text: str, client, model: str) -> str:
+    """Targeted fix-up for a single explanation still outside the 40-90 word
+    range after generation. Asking the model to fix just one narrow thing is
+    far more reliable than getting every constraint right simultaneously in
+    the original batched generation call — this is a follow-up, not a
+    replacement for that call. Keeps the closest-to-range attempt across
+    retries (mirroring generate_questions_for_segment's best-effort
+    approach) rather than discarding an improved-but-imperfect rewrite back
+    to the original, known-worse text.
+    """
+    prefix = "Correct." if text.startswith("Correct.") else "Incorrect." if text.startswith("Incorrect.") else None
+    prefix_note = f' Its opening ("{prefix}") must stay exactly as-is.' if prefix else ""
+    system = (
+        "Rewrite the given teaching explanation so it is between 40 and 90 words — it "
+        f"currently is not.{prefix_note} Preserve its meaning, any direct quote in curly "
+        "typographic quotes ‘like this’, and its direct, punchy tone. Add genuine teaching "
+        "content to reach the word count (why it matters, re-teaching the concept), not "
+        "filler or repetition. Respond with a JSON object of exactly this shape and "
+        'nothing else: {"text": "..."}'
+    )
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": text},
+    ]
+    best, best_distance = None, _range_distance(len(text.split()))
+    for attempt in range(RETRY_LIMIT + 1):
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=0.4,
+                response_format={"type": "json_object"},
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+            )
+            data = json.loads(resp.choices[0].message.content)
+            rewritten = data.get("text") if isinstance(data, dict) else None
+            if not isinstance(rewritten, str) or not rewritten.strip():
+                raise ValueError("missing 'text' in rewrite response")
+        except Exception as e:
+            log.warning(f"  explanation rewrite attempt {attempt + 1} failed: {e}")
+            continue
+
+        wc = len(rewritten.split())
+        distance = _range_distance(wc)
+        if distance < best_distance:
+            best, best_distance = _wrap_curly_quotes(rewritten), distance
+        if distance == 0:
+            return best
+        log.warning(f"  explanation rewrite attempt {attempt + 1}: still {wc} words (distance {distance})")
+
+    return best if best is not None else text
+
+
+def fix_up_explanations(rows: list[dict], client, model: str) -> int:
+    """Runs rewrite_explanation() on every Expln-A/Expln-B still outside
+    40-90 words, in place. Returns how many fields were actually changed."""
+    fixed = 0
+    for r in rows:
+        for col in ("Expln-A", "Expln-B"):
+            text = r.get(col, "")
+            wc = len(text.split())
+            if not (40 <= wc <= 90):
+                rewritten = rewrite_explanation(text, client, model)
+                if rewritten != text:
+                    r[col] = rewritten
+                    fixed += 1
+    return fixed
+
+
 def generate_question_bank(
     segments: list[dict],
     template_columns: list[str],
@@ -565,9 +643,14 @@ def generate_question_bank(
         if progress_cb:
             progress_cb(idx, len(chunks))
 
+    fixed_count = fix_up_explanations(rows, client, model)
+    if fixed_count:
+        log.info(f"  fix-up pass: rewrote {fixed_count} explanation(s) to hit the 40-90 word target")
+
     video_duration = segments[-1]["end"] if segments else 0.0
     punctuated = {s["end"] for s in segments if _is_terminal_punctuation(s["text"])}
     summary = build_summary(rows, boundaries, forced_splits, punctuated, video_duration, questions_per_segment)
+    summary["explanations_fixed_up"] = fixed_count
     return rows, summary
 
 
