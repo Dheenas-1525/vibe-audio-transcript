@@ -1,4 +1,5 @@
 import csv
+import difflib
 import io
 import json
 import logging
@@ -260,7 +261,10 @@ def plan_segment_boundaries(segments: list[dict], client, model: str):
     return _enforce_hard_ceiling(merged, end_times, punctuated)
 
 
-BANNED_META_PHRASES = ["the lecture", "the video", "the speaker", "in the lecture"]
+BANNED_META_PHRASES = [
+    "the lecture", "the video", "the speaker", "in the lecture",
+    "the transcript", "the source material",
+]
 
 # Heuristic: phrases near the end of a question that signal the answer
 # instead of letting the reader judge for themselves.
@@ -331,11 +335,14 @@ def build_summary(
 
     for r in rows:
         q = r.get("Question", "")
-        q_lower = q.lower()
-        if any(p in q_lower for p in BANNED_META_PHRASES):
-            warnings.append(f"S.No. {r.get('S.No.')}: question contains a meta-reference (\"the lecture\"/\"the video\").")
+        expln_a, expln_b = r.get("Expln-A", ""), r.get("Expln-B", "")
+        combined_lower = f"{q} {expln_a} {expln_b}".lower()
+        if any(p in combined_lower for p in BANNED_META_PHRASES):
+            warnings.append(f"S.No. {r.get('S.No.')}: question or explanation contains a meta-reference (\"the lecture\"/\"the video\").")
         if _ends_with_signal_phrase(q):
             warnings.append(f"S.No. {r.get('S.No.')}: question ends with an answer-signaling phrase.")
+        if _explanations_are_near_duplicate(expln_a, expln_b):
+            warnings.append(f"S.No. {r.get('S.No.')}: Expln-A and Expln-B are near-duplicates (only the verdict differs).")
         for col in ("Expln-A", "Expln-B"):
             text = r.get(col, "")
             wc = len(text.split())
@@ -421,10 +428,12 @@ RULES FOR THIS BATCH ({n_questions} questions):
 HINT: a short, pointed question (5-15 words) that signals what to check — never gives away the answer.
 
 EXPLANATIONS (expln_a and expln_b): BOTH are full teaching moments, regardless of which option is correct:
+- HARD REQUIREMENT: expln_a and expln_b must be GENUINELY DIFFERENT explanations, not the same text with only the opening word swapped. Do not write one explanation and reuse it for both — each must independently reason about why ITS OWN option (True or False) is right or wrong, using different phrasing and different supporting detail.
+- HARD REQUIREMENT: never write "the lecture," "the video," "the speaker," or "the transcript" in expln_a or expln_b — this applies here just as strictly as in the question. Quote the source material directly instead of narrating that it was said.
 - HARD REQUIREMENT: each of expln_a and expln_b must be between 40 and 90 words — count before finalizing. Under 40 words is not acceptable; pad with genuine teaching content (why it matters, what the correct concept is), not filler.
 - Start with exactly "Correct." or "Incorrect." (with the period).
-- Re-teach the underlying concept, not just judge the scenario. Avoid saying "the lecture" here too — quote the transcript directly instead of narrating that it was said.
-- Include one short direct quote from the transcript (5-25 words), wrapped in curly typographic quotes ‘like this’ — NOT straight quotes. Keep ordinary apostrophes in contractions/possessives straight (don't, Priya's).
+- Re-teach the underlying concept, not just judge the scenario.
+- Include one short direct quote from the source material (5-25 words), wrapped in curly typographic quotes ‘like this’ — NOT straight quotes. Keep ordinary apostrophes in contractions/possessives straight (don't, Priya's).
 - End with a sharp one-line summary where it fits naturally.
 - Tone: direct, slightly punchy, no hedging.
 
@@ -432,13 +441,37 @@ Respond with a JSON object of exactly this shape and nothing else:
 {{"questions": [{{"question": "...", "hint": "...", "expln_a": "...", "expln_b": "...", "correct_answer": "A"}}, ...]}}"""
 
 
+def _strip_verdict_prefix(text: str) -> str:
+    for prefix in ("Correct.", "Incorrect."):
+        if text.startswith(prefix):
+            return text[len(prefix):].strip().lower()
+    return text.strip().lower()
+
+
+def _explanations_are_near_duplicate(a: str, b: str) -> bool:
+    """True if expln_a/expln_b are the same content with only the verdict
+    word swapped — a real, observed model failure mode where "both"
+    explanations are really just one, mislabeled."""
+    na, nb = _strip_verdict_prefix(a), _strip_verdict_prefix(b)
+    if na == nb:
+        return True
+    return difflib.SequenceMatcher(None, na, nb).ratio() > 0.85
+
+
 def _validate_questions(items, n_questions):
     """Raises (triggering a retry in the caller) for violations the model is
     reliably able to fix on a retry: wrong item count, missing an
-    explanation prefix, or a banned meta-reference in the question. Word
-    count and closing-signal-phrase are intentionally NOT retry triggers —
-    those are softer/less reliably fixable and risk exhausting retries and
-    failing the whole segment; they're reported instead in build_summary()."""
+    explanation prefix, or a banned meta-reference in the QUESTION field.
+
+    Deliberately NOT hard-raised here, despite being real requirements:
+    a banned meta-reference inside expln_a/expln_b, and expln_a/expln_b
+    being near-duplicates of each other. Both were tried as hard triggers
+    and caused the whole segment to fail after exhausting retries — the
+    model has a strong, hard-to-break tendency to write "the transcript
+    states..." in explanations specifically, so treating it as a hard gate
+    there is worse than useless. These are instead scored in
+    _soft_violation_count (best-effort attempt selection) and fixed
+    post-generation in fix_up_explanations(), same as word count."""
     valid = [
         item for item in items
         if isinstance(item, dict)
@@ -464,16 +497,21 @@ def _validate_questions(items, n_questions):
 
 def _soft_violation_count(items) -> int:
     """Counts violations of rules that are real but not worth failing the
-    whole segment over (word count, closing signal phrase) — used to pick
-    the best attempt across retries rather than accepting the first one
-    that merely passes the hard checks in _validate_questions."""
+    whole segment over (word count, closing signal phrase, meta-reference in
+    an explanation, near-duplicate explanations) — used to pick the best
+    attempt across retries rather than accepting the first one that merely
+    passes the hard checks in _validate_questions."""
     count = 0
     for item in items:
         for field in ("expln_a", "expln_b"):
             wc = len(item[field].split())
             if not (40 <= wc <= 90):
                 count += 1
+            if any(p in item[field].lower() for p in BANNED_META_PHRASES):
+                count += 1
         if _ends_with_signal_phrase(item["question"]):
+            count += 1
+        if _explanations_are_near_duplicate(item["expln_a"], item["expln_b"]):
             count += 1
     return count
 
@@ -533,31 +571,46 @@ def _range_distance(word_count: int) -> int:
     return 0
 
 
+def _explanation_issue_score(text: str) -> int:
+    """Combined badness score for an explanation: word-count distance from
+    [40, 90] plus a heavy penalty for a banned meta-reference, so a rewrite
+    that fixes the meta-reference but drifts slightly on word count still
+    scores better than one that keeps the meta-reference."""
+    score = _range_distance(len(text.split()))
+    if any(p in text.lower() for p in BANNED_META_PHRASES):
+        score += 50
+    return score
+
+
 def rewrite_explanation(text: str, client, model: str) -> str:
     """Targeted fix-up for a single explanation still outside the 40-90 word
-    range after generation. Asking the model to fix just one narrow thing is
-    far more reliable than getting every constraint right simultaneously in
-    the original batched generation call — this is a follow-up, not a
-    replacement for that call. Keeps the closest-to-range attempt across
-    retries (mirroring generate_questions_for_segment's best-effort
-    approach) rather than discarding an improved-but-imperfect rewrite back
-    to the original, known-worse text.
+    range and/or containing a banned meta-reference ("the transcript
+    states...") after generation. Asking the model to fix just this one
+    field is far more reliable than getting every constraint right
+    simultaneously in the original batched generation call — this is a
+    follow-up, not a replacement for that call. Keeps the
+    closest-to-passing attempt across retries (mirroring
+    generate_questions_for_segment's best-effort approach) rather than
+    discarding an improved-but-imperfect rewrite back to the original,
+    known-worse text.
     """
     prefix = "Correct." if text.startswith("Correct.") else "Incorrect." if text.startswith("Incorrect.") else None
     prefix_note = f' Its opening ("{prefix}") must stay exactly as-is.' if prefix else ""
     system = (
-        "Rewrite the given teaching explanation so it is between 40 and 90 words — it "
-        f"currently is not.{prefix_note} Preserve its meaning, any direct quote in curly "
-        "typographic quotes ‘like this’, and its direct, punchy tone. Add genuine teaching "
-        "content to reach the word count (why it matters, re-teaching the concept), not "
-        "filler or repetition. Respond with a JSON object of exactly this shape and "
-        'nothing else: {"text": "..."}'
+        "Rewrite the given teaching explanation to fix its problems: it must be between 40 "
+        f"and 90 words, and it must NOT contain phrases like \"the transcript,\" \"the "
+        f"lecture,\" \"the video,\" or \"the speaker\" — quote the source material directly "
+        f"instead of narrating that it was said.{prefix_note} Preserve its meaning, any "
+        "direct quote in curly typographic quotes ‘like this’, and its direct, punchy tone. "
+        "Add genuine teaching content to reach the word count (why it matters, re-teaching "
+        "the concept), not filler or repetition. Respond with a JSON object of exactly this "
+        'shape and nothing else: {"text": "..."}'
     )
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": text},
     ]
-    best, best_distance = None, _range_distance(len(text.split()))
+    best, best_score = None, _explanation_issue_score(text)
     for attempt in range(RETRY_LIMIT + 1):
         try:
             resp = client.chat.completions.create(
@@ -575,26 +628,25 @@ def rewrite_explanation(text: str, client, model: str) -> str:
             log.warning(f"  explanation rewrite attempt {attempt + 1} failed: {e}")
             continue
 
-        wc = len(rewritten.split())
-        distance = _range_distance(wc)
-        if distance < best_distance:
-            best, best_distance = _wrap_curly_quotes(rewritten), distance
-        if distance == 0:
+        score = _explanation_issue_score(rewritten)
+        if score < best_score:
+            best, best_score = _wrap_curly_quotes(rewritten), score
+        if score == 0:
             return best
-        log.warning(f"  explanation rewrite attempt {attempt + 1}: still {wc} words (distance {distance})")
+        log.warning(f"  explanation rewrite attempt {attempt + 1}: still scores {score}")
 
     return best if best is not None else text
 
 
 def fix_up_explanations(rows: list[dict], client, model: str) -> int:
     """Runs rewrite_explanation() on every Expln-A/Expln-B still outside
-    40-90 words, in place. Returns how many fields were actually changed."""
+    40-90 words or containing a banned meta-reference, in place. Returns how
+    many fields were actually changed."""
     fixed = 0
     for r in rows:
         for col in ("Expln-A", "Expln-B"):
             text = r.get(col, "")
-            wc = len(text.split())
-            if not (40 <= wc <= 90):
+            if _explanation_issue_score(text) > 0:
                 rewritten = rewrite_explanation(text, client, model)
                 if rewritten != text:
                     r[col] = rewritten

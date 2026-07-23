@@ -1,6 +1,6 @@
 # ViBe Audio Transcript
 
-**v1.8.0** — YouTube URL → timestamped transcript → ViBe question bank CSV.
+**v1.9.0** — YouTube URL → timestamped transcript → ViBe question bank CSV.
 
 Paste a YouTube URL, get a timestamped transcript (download as TXT / SRT / VTT). Click
 "Generate Question Bank" to generate scenario-based true/false questions from that
