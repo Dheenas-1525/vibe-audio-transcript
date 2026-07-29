@@ -195,7 +195,7 @@ def download(job_id: str, fmt: str = "txt"):
     )
 
 
-def run_qb_job(job_id: str, template_columns: list[str], questions_per_segment: int):
+def run_qb_job(job_id: str, template_columns: list[str]):
     job = jobs[job_id]
     try:
         job["qb_status"] = "generating"
@@ -207,8 +207,7 @@ def run_qb_job(job_id: str, template_columns: list[str], questions_per_segment: 
             save_job(job_id)
 
         rows, summary = qb_generator.generate_question_bank(
-            job["segments"], template_columns, client, VLLM_MODEL,
-            questions_per_segment=questions_per_segment, progress_cb=progress,
+            job["segments"], template_columns, client, VLLM_MODEL, progress_cb=progress,
         )
         job["qb_rows"] = rows
         job["qb_columns"] = template_columns
@@ -221,12 +220,8 @@ def run_qb_job(job_id: str, template_columns: list[str], questions_per_segment: 
         save_job(job_id)
 
 
-class GenerateQuestionsRequest(BaseModel):
-    questions_per_segment: int = 5
-
-
 @app.post("/api/generate-questions/{job_id}")
-def generate_questions(job_id: str, req: GenerateQuestionsRequest = GenerateQuestionsRequest()):
+def generate_questions(job_id: str):
     job = jobs.get(job_id)
     if not job or job.get("status") != "done":
         raise HTTPException(404, "Transcript not ready")
@@ -235,7 +230,7 @@ def generate_questions(job_id: str, req: GenerateQuestionsRequest = GenerateQues
     save_job(job_id)
     threading.Thread(
         target=run_qb_job,
-        args=(job_id, qb_generator.TEMPLATE_COLUMNS, req.questions_per_segment),
+        args=(job_id, qb_generator.TEMPLATE_COLUMNS),
         daemon=True,
     ).start()
     return {"job_id": job_id}
