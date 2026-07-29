@@ -1,4 +1,5 @@
 import csv
+import difflib
 import io
 import json
 import logging
@@ -144,6 +145,79 @@ def _validate_qb_response(parsed) -> dict:
     return {"segments": segments, "verification_summary": parsed.get("verification_summary", "")}
 
 
+# Independent, code-side re-check of the prompt's own rules (Section 8),
+# since the model's self-reported verification_summary is not otherwise
+# fact-checked. Soft/informational only — does not trigger a retry, since
+# retrying the entire multi-segment call over one flagged item is wasteful;
+# these are surfaced in the summary for a human to review instead.
+_BANNED_ATTRIBUTION_PHRASES = [
+    "the video", "the speaker", "the lecture", "the transcript",
+    "the source material", "according to the talk", "he says", "she says",
+]
+_EXAMPLE_NAMES = [
+    "Priya", "Arjun", "Meera", "Karthik", "Anjali", "Ravi", "Divya",
+    "Vikram", "Nisha", "Suresh", "Ananya", "Rohan", "Deepika",
+]
+_DUPLICATE_SIMILARITY_THRESHOLD = 0.75
+
+
+def _code_verify(data: dict, rows: list[dict]) -> list[str]:
+    warnings = []
+    total = len(rows)
+    if total == 0:
+        return warnings
+
+    for r in rows:
+        wc = len(r["Question"].split())
+        if not (15 <= wc <= 30):
+            warnings.append(f"S.No. {r['S.No.']}: question is {wc} words (outside 15-30).")
+        qlow = r["Question"].lower()
+        if any(p in qlow for p in _BANNED_ATTRIBUTION_PHRASES):
+            warnings.append(f"S.No. {r['S.No.']}: question attributes the claim to the source.")
+        if qlow.strip().endswith("true or false?"):
+            warnings.append(f"S.No. {r['S.No.']}: question ends with \"True or False?\".")
+
+    ab_counts = {"A": 0, "B": 0}
+    for r in rows:
+        if r.get("Correct Answer") in ab_counts:
+            ab_counts[r["Correct Answer"]] += 1
+    a_ratio = ab_counts["A"] / total
+    if not (0.45 <= a_ratio <= 0.55):
+        warnings.append(f"A/B split is {a_ratio:.0%} True, outside the 45-55% target.")
+
+    named_flags = [any(n in r["Question"] for n in _EXAMPLE_NAMES) for r in rows]
+    named_ratio = sum(named_flags) / total
+    if not (0.10 <= named_ratio <= 0.30):
+        warnings.append(f"Named-character questions are {named_ratio:.0%} of the total (expected roughly 20%).")
+    by_segment: dict[str, int] = {}
+    for r, flag in zip(rows, named_flags):
+        by_segment[r["Segment"]] = by_segment.get(r["Segment"], 0) + (1 if flag else 0)
+    for seg, count in by_segment.items():
+        if count > 1:
+            warnings.append(f"Segment '{seg}' has {count} named-character questions clustered in one segment.")
+
+    questions = [r["Question"] for r in rows]
+    for i in range(len(questions)):
+        for j in range(i + 1, len(questions)):
+            ratio = difflib.SequenceMatcher(None, questions[i].lower(), questions[j].lower()).ratio()
+            if ratio > _DUPLICATE_SIMILARITY_THRESHOLD:
+                warnings.append(
+                    f"S.No. {rows[i]['S.No.']} and S.No. {rows[j]['S.No.']} may test the same "
+                    f"underlying concept (similarity {ratio:.0%})."
+                )
+
+    prev_max = -1.0
+    for seg in data["segments"]:
+        times = [t for t in (_parse_mmss(q["timestamp"]) for q in seg["questions"]) if t is not None]
+        if not times:
+            continue
+        if min(times) < prev_max:
+            warnings.append(f"Segment '{seg['title']}' has a question timestamped before the previous segment ended.")
+        prev_max = max(prev_max, max(times))
+
+    return warnings
+
+
 def generate_question_bank(
     segments: list[dict],
     template_columns: list[str],
@@ -217,12 +291,15 @@ def generate_question_bank(
         if ans in ab_counts:
             ab_counts[ans] += 1
 
+    code_warnings = _code_verify(data, rows)
+
     summary = {
         "video_length": fmt_mmss(segments[-1]["end"]),
         "segment_count": len(data["segments"]),
         "question_count": len(rows),
         "ab_split": ab_counts,
         "verification_summary": data["verification_summary"],
+        "code_warnings": code_warnings,
     }
     return rows, summary
 

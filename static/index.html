@@ -167,6 +167,13 @@ function renderQBSummary(s) {
   if (s.verification_summary) {
     html += `<div style="margin-top:8px;color:#c3c6db;white-space:pre-wrap;">${esc(s.verification_summary)}</div>`;
   }
+  if (s.code_warnings && s.code_warnings.length) {
+    html += `<div style="margin-top:8px;color:#e2a53a;">Code re-check flagged ${s.code_warnings.length} item(s) (independent of the model's own summary above):<ul style="margin:4px 0 0 18px;padding:0;">`
+      + s.code_warnings.map(w => `<li>${esc(w)}</li>`).join("")
+      + `</ul></div>`;
+  } else {
+    html += `<div style="margin-top:8px;color:#5fd88f;">Code re-check: no rule violations found.</div>`;
+  }
   $("qb-summary").innerHTML = html;
   $("qb-summary").style.display = "block";
 }
